@@ -1,0 +1,1 @@
+python apg_read_serial.py -s 140337 -v CSAC2013 --serport COM11 --serbaud 9600 --serparity N --serstop 1 --serbytesize 8

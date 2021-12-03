@@ -1,0 +1,102 @@
+##############################################################
+# Binary file format descriptions for LDEO APG Logger Boards #
+##############################################################
+
+[EXAMPLE]
+    # APG data format is:
+    #   Sequential 32-byte (256-bit) records, each containing one tic count,
+    #   one temperature sample and eight pressure samples.
+    
+    # File header length in bytes (16 records x 32 bytes)
+    head_len: 512
+    
+    # Record length in bytes
+    rec_len: 32
+    
+    # Number of pressure samples logged per record
+    smpls_per_rec: 8
+    
+    # Seconds per pressure sample logged (eg 100 Hz = 0.01 sec)
+    epoch: 0.01
+    
+    # clock_freq in Mhz
+    clock_freq: 50
+    
+    # Factors and constants used for calculating temperature and pressure periods.
+    TP_fctr: 2**28
+    TP_cnst: 1
+    PP_fctr: 2**25
+    PP_cnst: 1
+
+    # Format of each record as a tuple of integer numbers indicating bits per field.
+    # A negative indicates a signed (2s compliment) value.
+    # Note: The pressure values are unpacked as:
+    #   [Pcore Pcore+P2 Pcore+P2+P3 Pcore+P2+P3+P4... Pcore+P2+..+Pn]
+    #   Assumes Pcore to Pn fields are consecutive. Reverse order is permitted.
+    # field   0   1  2    3    4    5    6    7    8    9  10
+    rec_fmt: 34, 40, 2, -20, -20, -20, -20, -20, -20, -20, 40
+    tic_field: 0
+    temperature_field: 1
+    pcore_field: 10
+    pn_field: 3
+        # 0.   tic count    34 bits unsigned int
+        # 1.   Temperature  40 bits unsigned int
+        # 2.   unused        2 bits
+        # 3-9. P8-P2        7 x 20 bits signed int
+        # 10.  Pcore        40 bits unsigned int
+    
+##########################################
+# Edit or insert new records below here. #
+##########################################
+
+[CSAC2013]
+    head_len: 512
+    rec_len: 32
+    smpls_per_rec: 8
+    # 100 Hz = 0.01
+    epoch: 0.01
+    clock_freq: 50
+    
+    TP_fctr: 2**28
+    TP_cnst: 1
+    PP_fctr: 2**25
+    PP_cnst: 1
+    
+    # field   0   1  2    3    4    5    6    7    8    9  10
+    rec_fmt: 34, 40, 2, -20, -20, -20, -20, -20, -20, -20, 40
+    tic_field: 0
+    temperature_field: 1
+    pcore_field: 10
+    pn_field: 3
+        # 0.   tic count    34 bits unsigned int
+        # 1.   Temperature  40 bits unsigned int
+        # 2.   unused        2 bits
+        # 3-9. P8-P2        7 x 20 bits signed int
+        # 10.  Pcore        40 bits unsigned int
+
+
+[Seascan2018]
+    head_len: 512
+    rec_len: 32
+    smpls_per_rec: 9
+    # 125 Hz = 0.008
+    epoch: 0.008
+    clock_freq: 50
+    
+    TP_fctr: 2**21
+    TP_cnst: 0.5
+    PP_fctr: 2**21
+    PP_cnst: 0.5
+    
+    # field   0   1   2  3    4    5    6    7    8    9   10   11  12
+    rec_fmt: 32, 24, 32, 4, -16, -16, -16, -16, -16, -16, -16, -16, 36
+    tic_field: 0
+    temperature_field: 2
+    pcore_field: 12
+    pn_field: 4
+        # 0.    tic count    32 bits unsigned int
+        # 1.    unused       24 bits
+        # 2.    Temperature  32 bits unsigned int
+        # 3.    unused        4 bits
+        # 4-11. P9-P2        8 x 16 bits signed int
+        # 12.   Pcore        36 bits unsigned int
