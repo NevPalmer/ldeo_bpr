@@ -441,7 +441,8 @@ def main():
         temperature_dcmtd = temperature_upsmpld
         millisecs_dcmtd = millisecs_p
         # First decimate to whole seconds
-        decmt_intvl_pre = clock_freq
+        sample_freq = 1000/sample_epoch
+        decmt_intvl_pre = sample_freq
         first = True
         while decmt_intvl_pre > 1:
             if decmt_intvl_pre % 5 == 0:
