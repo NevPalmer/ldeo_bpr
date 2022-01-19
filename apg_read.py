@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/home/nevillep/miniconda3/bin/python
 
 # Version 20201202
 # by Neville Palmer, GNS Science
@@ -441,7 +441,7 @@ def main():
         temperature_dcmtd = temperature_upsmpld
         millisecs_dcmtd = millisecs_p
         # First decimate to whole seconds
-        sample_freq = 1000/sample_epoch
+        sample_freq = int(1000/sample_epoch)
         decmt_intvl_pre = sample_freq
         first = True
         while decmt_intvl_pre > 1:
