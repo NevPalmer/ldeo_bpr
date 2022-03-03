@@ -1,4 +1,4 @@
-#!/home/nevillep/miniconda3/bin/python
+#!/home/nevillep/miniforge3/envs/geod/bin/python
 
 # Version 20201202
 # by Neville Palmer, GNS Science
