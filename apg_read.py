@@ -127,6 +127,9 @@ def main():
     parser.add_argument("-p", "--plot",
                         help='Generate and display a timeline plot.',
                         action='store_true')
+    parser.add_argument("-r", "--rawbinary",
+                        help='Output raw binary data to stdout.',
+                        action='store_true')
     args = parser.parse_args()
 
     # Translate argparse parameters (except for window times).
@@ -147,6 +150,7 @@ def main():
         out_filename = os.path.normpath(args.outfile)
     time_format = args.fmttime.strip()
     plot_flag = args.plot
+    rawbin_flag = args.rawbinary
 
     # Read Paros transducer coefficients into a dict of lists from ini file.
     paros_coefs = ('U', 'Y', 'C', 'D', 'T')
@@ -194,6 +198,14 @@ def main():
                  f"does not equal the record length ({rec_len} bytes x 8), "
                  f"as provided in the file {logger_ini}.")
 
+    # Assign field names to columns of raw data record.
+    last_field = len(rec_fmt) - 1
+    pcore = last_field - fmt_fields['pcore']
+    pn = last_field - fmt_fields['pn']
+    tptr = last_field - fmt_fields['tptr']
+    tic = last_field - fmt_fields['tic']
+
+
     # Calculate duration and end time of raw file.
     try:
         fsize = os.path.getsize(apg_filename)  # file size in bytes
@@ -239,20 +251,11 @@ def main():
 
     # Extract records from APG file for the time window specified.
     begin_byte = head_len + rec_begin * rec_len
-    records = extractrecords(apg_filename, begin_byte, nrecs_want,
-                             rec_len, rec_fmt)
-    ''' Comment this line to save raw records to file as integers.
-    np.savetxt('raw_records.txt', records, fmt='%d',
-            header='',
-            comments='')
-    #'''
+    records = extractrecords(apg_filename, begin_byte, nrecs_want, rec_begin, rec_len, record_epoch,
+                             smpls_per_rec, sample_epoch, timing, tic, fmt_fields, rec_fmt, rawbin_flag)
 
-    # Assign extracted records to field names.
-    last_field = len(rec_fmt) - 1
-    pcore = last_field - fmt_fields['pcore']
-    pn = last_field - fmt_fields['pn']
-    tptr = last_field - fmt_fields['tptr']
-    tic = last_field - fmt_fields['tic']
+
+    # Create an array for each raw observable (pressure, temperature, ticks)
     if pn > pcore:
         press_raw = records[:, pcore:pn+1]
     else:
@@ -260,76 +263,22 @@ def main():
     press_raw = np.cumsum(press_raw, axis=1)
     press_raw = press_raw.reshape((nrecs_want*smpls_per_rec))
     temp_raw = (records[:, tptr])
-    # Shift the tick count if necessary, so that it relates to the first sample
-    # in each record (instead of the last).
-    if timing == 'first':
-        first_tic = 0
-    elif timing == 'last':
-        first_tic = (smpls_per_rec - 1) * sample_epoch 
-    ticks = (records[:, tic] - first_tic)  # ticks are equivalent to milliseconds
+    ticks = (records[:, tic])  # ticks are equivalent to milliseconds
 
-    nominal_begin_tick = rec_begin * record_epoch
-    nominal_end_tick = (rec_begin + nrecs_want -1) * record_epoch
+
     actual_end_tick = ticks[-1] + (smpls_per_rec - 1) * sample_epoch
     actual_begin_tick = ticks[0]
 
-    #print(f'Actual beginning tick: {actual_begin_tick}')
-    #print(f'Actual end tick: {actual_end_tick}')
-    #print(f'Nominal beginning tick: {nominal_begin_tick}')
-    #print(f'Nominal end tick: {nominal_end_tick}')
-
-
-    # Remove tick count rollovers and make actual ticks continuously increasing.
+    # Save raw records to file as integers with tick rollover removed.
+    ''' Comment this line for troubleshooting.
+    np.savetxt('raw_records_2.txt', records, fmt='%d',
+            header='',
+            comments='')
     #'''
-    tic_field_len = rec_fmt[fmt_fields['tic']]
-    # print(f'Tick field length (in bits): {tic_field_len}')
-    rollover_period = 2 ** tic_field_len  # in millisec
-    # print(f'Rollover length (in millisec/ticks): {rollover_period}')
-    # The number of rollovers prior to the beginning of the specified data window.
-    nom_rollovers_begin = int(nominal_begin_tick / rollover_period)
-    nom_rollover_balance = nominal_begin_tick % rollover_period
-    # Does the nominal rollover count align with the actual count.
-    # (Within 1e7 millisec or approx 166 minutes.)
-    if abs(ticks[0] - nom_rollover_balance) < 1e7:
-        actl_rollovers_begin = nom_rollovers_begin
-    elif ticks[0] - nom_rollover_balance > 1e7:
-        actl_rollovers_begin = nom_rollovers_begin - 1
-    else:
-        actl_rollovers_begin = nom_rollovers_begin + 1
 
-    # {rollovers} contains the index of the first record after each rollover.
-    rollovers = np.where(ticks[:-1] > ticks[1:])[0] + 1
-    #print(f'Index values of rollovers within ticks array: {rollovers}')
-    cumtv_rollovers = actl_rollovers_begin
-    #print(f'Count of cumulative rollovers at beginning of window: {cumtv_rollovers}')
-    if cumtv_rollovers != 0:
-        if rollovers.size == 0:
-            ticks = ticks + rollover_period * cumtv_rollovers
-        else:
-            ticks[0:rollovers[0]] = (ticks[0:rollovers[0]] 
-                                    + rollover_period * cumtv_rollovers)
-
-    for idx, rollover in np.ndenumerate(rollovers):
-        if rollover == rollovers[-1]:
-            nxt_rollover = nrecs_want
-        else:
-            nxt_rollover = rollovers[idx[0]+1]
-        #print(rollover, nxt_rollover)
-        # If the tick count does not rollover cleanly and takes more than one
-        # record to reset to zero, then for first record after the rollover 
-        # calc as the previous cumulative tick count plus a std record period.
-        if nxt_rollover - rollover == 1:
-            ticks[rollover] = ticks[rollover-1] + record_epoch
-        else:
-            cumtv_rollovers = cumtv_rollovers + 1
-            ticks[rollover:nxt_rollover] = (ticks[rollover:nxt_rollover] 
-                                        + rollover_period * cumtv_rollovers)
-    #print(ticks)
-    #'''
 
     # Write a summary file showing out of sync tic counts and exit.
-    # Uncomment below for troubleshooting.
-    '''
+    ''' Comment this line for troubleshooting.
     millisecs_t = np.linspace(nominal_begin_tick, nominal_end_tick,
                               num=nrecs_want,
                               endpoint=True)
@@ -357,10 +306,12 @@ def main():
     # If the nominal tick count and actual recorded tick count are not precisely
     # aligned then use linear interpolation to generate a precisely periodic
     # record of raw temperature and pressure values.
-    #'''
-    if True:
-    #if (actual_begin_tick == nominal_begin_tick 
-    #    and actual_end_tick == nominal_end_tick):
+    nominal_begin_tick = rec_begin * record_epoch
+    nominal_end_tick = (rec_begin + nrecs_want -1) * record_epoch
+
+    print(f'nom_begin: {nominal_begin_tick}\nact_begin: {actual_begin_tick}\nnom_end: {nominal_end_tick}\nact_end: {actual_end_tick}\n')
+    if (actual_begin_tick == nominal_begin_tick 
+        and actual_end_tick == nominal_end_tick):
         millisecs_t = np.linspace(nominal_begin_tick,
                                   nominal_end_tick,
                                   num=nrecs_want,
@@ -392,7 +343,6 @@ def main():
         temp_raw = np.interp(millisecs_t, ticks, temp_raw)
         press_raw = np.interp(millisecs_p, ticks_p, press_raw)
 
-    #'''
 
     # Temperature period (usec)
     TP = (temp_raw/(TP_fctr)+TP_cnst)/(clock_freq)
@@ -596,34 +546,33 @@ def main():
 
 
 ###########################################################################
-def extractrecords(apg_filename, begin_byte, nrecs_want, rec_len, rec_fmt):
+def extractrecords(apg_filename, begin_byte, nrecs_want, rec_begin, rec_len, record_epoch,
+                   smpls_per_rec, sample_epoch, timing, tic, fmt_fields, rec_fmt, rawbin_flag):
     '''
     Extracts binary records from a raw APG data logger file.
     '''
-    print('Extracting raw records:', end='')
+    print('Extracting raw records:\n', end='')
     with open(apg_filename, 'rb') as apgfile:
         apgfile.seek(begin_byte, os.SEEK_CUR)
         records = []
         for i in range(0, nrecs_want):
             record_bin = apgfile.read(rec_len)
 
-            # Print record as a string of Hex and/or Bin values.
-            # Uncomment below for troubleshooting.
-            '''
-            hex_str = ''
-            bin_str = ''
-            for ch in record_bin:
-                #hex_str += hex(ch)+' '
-                bin_str += f'{ch:08b}'
-            #print(hex_str)
-            cum_rec_fmt = np.cumsum(list(map(abs,rec_fmt)))
-            new_bin_str = ''
-            for i in range( len(bin_str) ):
-                if i in cum_rec_fmt:
-                    new_bin_str = new_bin_str + ' '
-                new_bin_str = new_bin_str + bin_str[i]
-            print(new_bin_str)
-            '''
+            # Print record as a string of Hex and/or Bin values to stdout.
+            if rawbin_flag:
+                hex_str = ''
+                bin_str = ''
+                for ch in record_bin:
+                    #hex_str += hex(ch)+' '
+                    bin_str += f'{ch:08b}'
+                #print(hex_str)
+                cum_rec_fmt = np.cumsum(list(map(abs,rec_fmt)))
+                new_bin_str = ''
+                for i in range( len(bin_str) ):
+                    if i in cum_rec_fmt:
+                        new_bin_str = new_bin_str + ' '
+                    new_bin_str = new_bin_str + bin_str[i]
+                print(new_bin_str)
 
             # Split record into array of ints defined as groups of bits
             # by rec_fmt.
@@ -649,8 +598,77 @@ def extractrecords(apg_filename, begin_byte, nrecs_want, rec_len, rec_fmt):
             # Print a "." every 10000 records to indicate script is running.
             if i % 10000 == 0:
                 print('.', end='', flush=True)
-        print('\n')
-    return(np.array(records))
+        print()
+
+        records = np.array(records)
+
+        # Save raw records to file as integers without tick rollover removed.
+        ''' Comment this line for troubleshooting.
+        np.savetxt('raw_records_1.txt', records, fmt='%d',
+                header='',
+                comments='')
+        #'''
+
+
+        # Shift the tick count if necessary, so that it relates to the first sample
+        # in each record (instead of the last).
+        if timing == 'first':
+            first_tic = 0
+        elif timing == 'last':
+            first_tic = int((smpls_per_rec - 1) * sample_epoch)
+        ticks = (records[:, tic] - first_tic)  # ticks are equivalent to milliseconds
+
+
+        # Remove tick count rollovers and make actual ticks continuously increasing.
+        nominal_begin_tick = rec_begin * record_epoch
+        nominal_end_tick = (rec_begin + nrecs_want -1) * record_epoch
+        tic_field_len = rec_fmt[fmt_fields['tic']]
+        # print(f'Tick field length (in bits): {tic_field_len}')
+        rollover_period = 2 ** tic_field_len  # in millisec
+        # print(f'Rollover length (in millisec/ticks): {rollover_period}')
+        # The number of rollovers prior to the beginning of the specified data window.
+        nom_rollovers_begin = int(nominal_begin_tick / rollover_period)
+        nom_rollover_balance = nominal_begin_tick % rollover_period
+        # Does the nominal rollover count align with the actual count.
+        # (Within 1e7 millisec or approx 166 minutes.)
+        if abs(ticks[0] - nom_rollover_balance) < 1e7:
+            actl_rollovers_begin = nom_rollovers_begin
+        elif ticks[0] - nom_rollover_balance > 1e7:
+            actl_rollovers_begin = nom_rollovers_begin - 1
+        else:
+            actl_rollovers_begin = nom_rollovers_begin + 1
+
+        # {rollovers} contains the index of the first record after each rollover.
+        rollovers = np.where(ticks[:-1] > ticks[1:])[0] + 1
+        #print(f'Index values of rollovers within ticks array: {rollovers}')
+        cumtv_rollovers = actl_rollovers_begin
+        #print(f'Count of cumulative rollovers at beginning of window: {cumtv_rollovers}')
+        if cumtv_rollovers != 0:
+            if rollovers.size == 0:
+                ticks = ticks + rollover_period * cumtv_rollovers
+            else:
+                ticks[0:rollovers[0]] = (ticks[0:rollovers[0]] 
+                                        + rollover_period * cumtv_rollovers)
+
+        for idx, rollover in np.ndenumerate(rollovers):
+            if rollover == rollovers[-1]:
+                nxt_rollover = nrecs_want
+            else:
+                nxt_rollover = rollovers[idx[0]+1]
+            #print(rollover, nxt_rollover)
+            # If the tick count does not rollover cleanly and takes more than one
+            # record to reset to zero, then for first record after the rollover 
+            # calc as the previous cumulative tick count plus a std record period.
+            if nxt_rollover - rollover == 1:
+                ticks[rollover] = ticks[rollover-1] + record_epoch
+            else:
+                cumtv_rollovers = cumtv_rollovers + 1
+                ticks[rollover:nxt_rollover] = (ticks[rollover:nxt_rollover] 
+                                            + rollover_period * cumtv_rollovers)
+
+    records[:, -1] = ticks
+
+    return(records)
 
 
 #####################################################################
