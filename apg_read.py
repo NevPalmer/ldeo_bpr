@@ -207,7 +207,7 @@ def main():
 
     # Clock drift
     if (args.gpssynctime is not None):
-        drift = clockdrift(logger, clk_start_dt, gpssync_dt, sync_tick_count)
+        drift = clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count)
         print(f'Clock drift in milliseconds (logged time minus actual '
               f'GPS time) = {drift}')
 
@@ -235,8 +235,16 @@ def main():
     nrecs_want = int(wndw_len_secs*1000 / logger['record_epoch'] )+1
 
     # Extract records from APG file for the time window specified.
+    print('Extracting raw records:\n', end='')
     records = extractrecords(apg_filename, logger, nrecs_want, rec_begin,
                              rawbin_flag)
+
+    # Save raw records to file as integers with tick rollover removed.
+    ''' Comment this line for troubleshooting.
+    np.savetxt('raw_records_no-rollover.txt', records, fmt='%d',
+            header='',
+            comments='')
+    #'''
 
 
     # Create an array for each raw observable (pressure, temperature, ticks)
@@ -252,13 +260,6 @@ def main():
 
     actual_end_tick = ticks[-1] + (logger['smpls_per_rec']  - 1) * logger['sample_epoch'] 
     actual_begin_tick = ticks[0]
-
-    # Save raw records to file as integers with tick rollover removed.
-    ''' Comment this line for troubleshooting.
-    np.savetxt('raw_records_2.txt', records, fmt='%d',
-            header='',
-            comments='')
-    #'''
 
 
     # Write a summary file showing out of sync tic counts and exit.
@@ -535,7 +536,6 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, rawbin_flag):
     '''
     Extracts binary records from a raw APG data logger file.
     '''
-    print('Extracting raw records:\n', end='')
     with open(apg_filename, 'rb') as apgfile:
         begin_byte = logger['head_len']  + rec_begin * logger['rec_len']
         apgfile.seek(begin_byte , os.SEEK_CUR)
@@ -589,7 +589,7 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, rawbin_flag):
 
         # Save raw records to file as integers without tick rollover removed.
         ''' Comment this line for troubleshooting.
-        np.savetxt('raw_records_1.txt', records, fmt='%d',
+        np.savetxt('raw_records_rollover.txt', records, fmt='%d',
                 header='',
                 comments='')
         #'''
@@ -658,7 +658,7 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, rawbin_flag):
 
 
 #####################################################################
-def clockdrift(logger, clk_start_dt, gpssync_dt, sync_tick_count):
+def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
     '''
     Calculates the clock drift using one of two methods.
     The expected number of tick counts between clk_start_dt and gpssync_dt
@@ -671,16 +671,76 @@ def clockdrift(logger, clk_start_dt, gpssync_dt, sync_tick_count):
     count when this frequency starts is detected in the data and this value
     is used in place of sync_tick_count.
     '''
-    if (sync_tick_count is None):
-        sys.exit('The code for time sync by frequency injection has not been '
-                 'written yet.')
-
+    
     millisecs_logged = ((gpssync_dt - clk_start_dt).total_seconds()) * 1000
-    # Number of ticks until rollover and restart at zero.
-    tick_rollover = 2**logger['tic_bit_len']  # 1 tick = 1 millisecond
+
+    if (sync_tick_count is None):
+        # Assign names to column numbers of raw data array.
+        # Note that raw data array columns are reverse order to raw binary.
+        last_field = len(logger['rec_fmt'] ) - 1
+        tick_col = last_field - logger['fmt_field']['tic']
+        pcore_col = last_field - logger['fmt_field']['pcore']
+        pn_col = last_field - logger['fmt_field']['pn']
+        tptr_col = last_field - logger['fmt_field']['tptr']
+
+        # Window for identifying sync_tick_count is 10 minutes long.
+        wndw_len_secs = 5 * 60
+        # GPS sync time (gpssync_dt) is mid point of  window for sync.
+        wndw_begin_secs = ((gpssync_dt - clk_start_dt).total_seconds())
+        wndw_begin_secs = wndw_begin_secs - (wndw_len_secs / 2)
+        rec_begin = int(wndw_begin_secs*1000 / logger['record_epoch'] )
+        nrecs_want = int(wndw_len_secs*1000 / logger['record_epoch'] )+1
+        
+        sync_records = extractrecords(apg_filename, logger, nrecs_want, rec_begin,
+                             False)
+        # Save raw records to file as integers with tick rollover removed.
+        #''' Comment this line for troubleshooting.
+        np.savetxt('raw_sync_records.txt', sync_records, fmt='%d',
+                header='',
+                comments='')
+        #'''
+        
+        # Identify the first record block where the pressure value changes.
+        difference = np.diff(sync_records[:,pcore_col])
+        diff_rows = (np.where(difference!=0)[0])
+        # Checks for consecutive rows that have differences
+        difference = np.diff(diff_rows)
+        x = (np.where(difference>1)[0][-1])+1
+        if x.any():
+            i = diff_rows[x]
+        else:
+            i = diff_rows[0]
+        sync_block = sync_records[i,:]
+
+        print(diff_rows)
+        print(sync_block)
+
+        if pn_col > pcore_col:
+            pn = sync_block[pcore_col+1:pn_col+1]
+        else:
+            pn = sync_block[pcore_col-1:pn_col-1:-1]
+        print(pn)
+        nonzero = (np.where(pn!=0)[0])
+        if nonzero.any():
+            i = nonzero[0]+1
+        else:
+            i = len(pn+1)
+        print(i)
+
+        sync_tick_count = sync_block[tick_col] + (i * logger['sample_epoch'])
+        sync_tick_count = int(sync_tick_count)
+        print(sync_tick_count)
+
+        #sys.exit('The code for time sync by frequency injection has not been '
+        #         'completed yet.')
+    
+    else:
+        # Number of ticks until rollover and restart at zero.
+        tick_rollover = 2**logger['tic_bit_len']  # 1 tick = 1 millisecond
+        millisecs_logged = millisecs_logged % tick_rollover
+
     # APG logger clock offset relative to GPS time (positive = APG > GPS)
-    clk_drift_at_end = int(sync_tick_count -
-                           (millisecs_logged % tick_rollover))
+    clk_drift_at_end = int(sync_tick_count - (millisecs_logged))
 
     return(clk_drift_at_end)
 
