@@ -294,8 +294,8 @@ def main():
     nominal_begin_tick = rec_begin * logger['record_epoch'] 
     nominal_end_tick = (rec_begin + nrecs_want -1) * logger['record_epoch'] 
 
-    print(f'nom_begin: {nominal_begin_tick}\nact_begin: {actual_begin_tick}\n'
-          f'nom_end: {nominal_end_tick}\nact_end: {actual_end_tick}\n')
+    # print(f'nom_begin: {nominal_begin_tick}\nact_begin: {actual_begin_tick}\n'
+    #       f'nom_end: {nominal_end_tick}\nact_end: {actual_end_tick}\n')
     if (actual_begin_tick == nominal_begin_tick 
         and actual_end_tick == nominal_end_tick):
         millisecs_t = np.linspace(nominal_begin_tick,
@@ -328,7 +328,6 @@ def main():
         # Interpolate to generate fixed period observation epochs.
         temp_raw = np.interp(millisecs_t, ticks, temp_raw)
         press_raw = np.interp(millisecs_p, ticks_p, press_raw)
-
 
     # Temperature period (usec)
     TP = (temp_raw/(logger['TP_fctr'] )+logger['TP_cnst'] )/(logger['clock_freq'] )
@@ -417,11 +416,6 @@ def main():
             millisecs_dcmtd = millisecs_dcmtd[::decmt_fctr]
             decmt_intvl = decmt_intvl // decmt_fctr
         print()
-
-#    print (ticks)
-#    print(temperature)
-#    print(pressure)
-#    [print(press,end=', ') for press in pressure]
 
     if len(pressure_dcmtd) != 0:
         time = millisecs_dcmtd / 1000
@@ -683,13 +677,13 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
         pn_col = last_field - logger['fmt_field']['pn']
         tptr_col = last_field - logger['fmt_field']['tptr']
 
-        # Window for identifying sync_tick_count is 10 minutes long.
-        wndw_len_secs = 5 * 60
+        # Window for identifying sync_tick_count is +/-5 minutes long.
+        sync_wndw_secs = 5 * 60
         # GPS sync time (gpssync_dt) is mid point of  window for sync.
         wndw_begin_secs = ((gpssync_dt - clk_start_dt).total_seconds())
-        wndw_begin_secs = wndw_begin_secs - (wndw_len_secs / 2)
+        wndw_begin_secs = wndw_begin_secs - (sync_wndw_secs)
         rec_begin = int(wndw_begin_secs*1000 / logger['record_epoch'] )
-        nrecs_want = int(wndw_len_secs*1000 / logger['record_epoch'] )+1
+        nrecs_want = int(sync_wndw_secs*2000 / logger['record_epoch'] )+1
         
         sync_records = extractrecords(apg_filename, logger, nrecs_want, rec_begin,
                              False)
@@ -700,40 +694,70 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
                 comments='')
         #'''
         
-        # Identify the first record block where the pressure value changes.
-        difference = np.diff(sync_records[:,pcore_col])
-        diff_rows = (np.where(difference!=0)[0])
-        # Checks for consecutive rows that have differences
-        difference = np.diff(diff_rows)
-        x = (np.where(difference>1)[0][-1])+1
-        if x.any():
-            i = diff_rows[x]
-        else:
-            i = diff_rows[0]
-        sync_block = sync_records[i,:]
+        # Identify the start of the record block where the pressure values 
+        # start changing again (ie This is where frequency injection for time 
+        # sync occurs).
+        # Identify all consecutive row pairs where p_core changes.
+        pcore_diff = np.diff(sync_records[:,pcore_col])
+        pcore_diff_row = (np.where(pcore_diff!=0)[0])+1
+        # Select the final instance where p_core starts changing
+        # This exculdes any single noise values occuring before actual frequency
+        # injection.
+        diff_row_increments = np.diff(pcore_diff_row)
+        x = np.where(diff_row_increments>1)[0]+1
+        x = np.insert(x,0,0)
+        poss_sync_row = pcore_diff_row[x]-1
+        print("poss_sync_row: ",poss_sync_row)
 
-        print(diff_rows)
-        print(sync_block)
+        # For each poss_sync_row check:
+        #   - immed prev row has all Pn values as zero,
+        #      (Indicates two consecutive p_core values to be identical although
+        #       surrounding values continue changing)
+        #   - immed next row does not have all Pn values as zero.
+        #       (Indicates noise value occuring before actual frequency injection.)
+        # It is possible for two consecutive p_core values
+        # to be identical although surrounding values continue changing.
+        for n in range(np.size(poss_sync_row)-1, -1, -1):
+            sync_row = poss_sync_row[n]
+            prev_sync_row = sync_row - 1
+            prev_block = sync_records[prev_sync_row,:]
+            next_sync_row = sync_row + 1
+            next_block = sync_records[next_sync_row,:]
+
+            if pn_col > pcore_col:
+                prev_pn = prev_block[pcore_col+1:pn_col+1]
+                next_pn = next_block[pcore_col+1:pn_col+1]
+            else:
+                prev_pn = prev_block[pcore_col-1:pn_col-1:-1]
+                next_pn = next_block[pcore_col-1:pn_col-1:-1]
+            
+            prev_nonzero = (np.where(prev_pn!=0)[0])
+            next_nonzero = (np.where(next_pn!=0)[0])
+            if not prev_nonzero.any() and next_nonzero.any():
+                sync_row = poss_sync_row[n]
+                break
+
+        try:
+            sync_block = sync_records[sync_row,:]
+        except UnboundLocalError:
+            sys.exit(f'Unable to determine clock drift.\n'
+                f'The period {gpssync_dt} +/-{sync_wndw_secs} seconds does not include a \n'
+                f'frequency injection for syncing to.')
 
         if pn_col > pcore_col:
             pn = sync_block[pcore_col+1:pn_col+1]
         else:
             pn = sync_block[pcore_col-1:pn_col-1:-1]
-        print(pn)
+
         nonzero = (np.where(pn!=0)[0])
         if nonzero.any():
-            i = nonzero[0]+1
+            i = len(pn)+1 - nonzero.size
         else:
-            i = len(pn+1)
-        print(i)
+            i = len(pn)+1
 
         sync_tick_count = sync_block[tick_col] + (i * logger['sample_epoch'])
         sync_tick_count = int(sync_tick_count)
-        print(sync_tick_count)
 
-        #sys.exit('The code for time sync by frequency injection has not been '
-        #         'completed yet.')
-    
     else:
         # Number of ticks until rollover and restart at zero.
         tick_rollover = 2**logger['tic_bit_len']  # 1 tick = 1 millisecond
