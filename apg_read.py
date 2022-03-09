@@ -707,6 +707,7 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
         x = np.where(diff_row_increments>1)[0]+1
         x = np.insert(x,0,0)
         poss_sync_row = pcore_diff_row[x]-1
+        print("poss_sync_row: ",poss_sync_row)
 
         # For each poss_sync_row check:
         #   - immed prev row has all Pn values as zero,
