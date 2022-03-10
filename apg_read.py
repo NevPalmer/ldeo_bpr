@@ -108,8 +108,12 @@ def main():
                         choices=['s','d'],
                         default='s')
     parser.add_argument("-p", "--plot",
-                        help='Generate and display a timeline plot.',
-                        action='store_true')
+                        help='Generate and display a timeline plot. Either display '
+                        'only the (f)inal smoothed/decimated result or additionally '
+                        'dispaly the (r)aw data in the background or (n)ot generate '
+                        'any plot at all.',
+                        choices=['n','f','r'],
+                        default='n')
     parser.add_argument("-r", "--rawbinary",
                         help='Output raw binary data to stdout.',
                         action='store_true')
@@ -132,7 +136,7 @@ def main():
     if args.outfile:
         out_filename = os.path.normpath(args.outfile)
     time_format = args.fmttime.strip()
-    plot_flag = args.plot
+    plot_flag = args.plot.strip()
     rawbin_flag = args.rawbinary
 
     # Read Paros transducer coefficients into a dict of lists from ini file.
@@ -345,15 +349,16 @@ def main():
     # This eliminates significant noise from the pressure values.
     if tmptr_smth_fctr >= 5:
         print('Applying temperature smoothing filter.')
-        TP = sig.savgol_filter(TP, tmptr_smth_fctr, 3, axis=0, mode='mirror')
+        TP_smth = sig.savgol_filter(TP, tmptr_smth_fctr, 3, axis=0, mode='mirror')
 
     # Calculate temperature array
     print('Calculating temperatures and pressures.')
-    Uv = TP-paros['U'][0]
-    temperature = np.polyval(paros['Y'], Uv)
+    Uv = TP - paros['U'][0]
+    temperature_raw = np.polyval(paros['Y'], Uv)
+    Uv_smth = TP_smth - paros['U'][0]
     # Upsample temperatures to match frequency of pressure samples by
     #  linear interpolation.
-    Uv_expnd = np.interp(millisecs_p, millisecs_t, Uv)
+    Uv_expnd = np.interp(millisecs_p, millisecs_t, Uv_smth)
     temperature_upsmpld = np.polyval(paros['Y'], Uv_expnd)
     
     # Calculate pressure array
@@ -425,8 +430,6 @@ def main():
         time = millisecs_p / 1000
         pressure_out = pressure
         temperature_out = temperature_upsmpld
-    time_p = millisecs_p / 1000
-    time_t = millisecs_t / 1000
 
     # Convert timestamp from seconds to datetime if specified.
     xlabel = 'Seconds'
@@ -434,11 +437,6 @@ def main():
         print('Calculating a timestamp array from the seconds array.')
         time = [clk_start_dt + dt.timedelta
                 (seconds=sec) for sec in time]
-        if len(pressure_dcmtd) != 0:
-            time_p = [clk_start_dt + dt.timedelta
-                    (seconds=sec) for sec in time_p]
-            time_t = [clk_start_dt + dt.timedelta
-                    (seconds=sec) for sec in time_t]
         xlabel = 'Date-Time'
 
     results = np.column_stack((time, pressure_out, temperature_out))
@@ -448,11 +446,11 @@ def main():
         print('Saving results to file.')
         np.savetxt(out_filename, results, fmt='%s,%f,%f')
 
-    if plot_flag:
+    if plot_flag != 'n':
         # Set min-max values for plot Y-axes
         print('Generating plot.')
-        p_min = np.min(pressure)
-        p_max = np.max(pressure)
+        p_min = np.min(results[:, 1])
+        p_max = np.max(results[:, 1])
         p_range = p_max - p_min
         if p_range == 0:
             intvl = 10
@@ -469,8 +467,8 @@ def main():
         p_min = p_min - p_min % intvl - intvl
         p_max = p_max - p_max % intvl + 2*intvl
 
-        t_min = np.min(temperature)
-        t_max = np.max(temperature)
+        t_min = np.min(results[:, 2])
+        t_max = np.max(results[:, 2])
         t_range = t_max-t_min
         if t_range == 0:
             intvl = 0.1
@@ -488,38 +486,53 @@ def main():
         t_max = t_max - t_max % intvl + 2*intvl
 
         # Plot Results
-        fig, ax1 = plt.subplots()
-        color = 'red'
+        fig, ax2 = plt.subplots()
+        plt.ylim(t_min, t_max)
+        ax1 = ax2.twinx()
         plt.ylim(p_min, p_max)
-        #'''
-        if len(pressure_dcmtd) != 0:
+
+        # Plot raw pressure values if requested
+        smthd = tmptr_smth_fctr >= 5
+        dcmtd = decmt_intvl != 0
+        if dcmtd and plot_flag == 'r':
+            time_p = millisecs_p / 1000
+            if time_format == 'd':
+                time_p = [clk_start_dt + dt.timedelta
+                        (seconds=sec) for sec in time_p]
             ax1.plot(time_p, pressure, color='pink', marker='.',
                     markersize=1.0, linestyle='')
-        #'''
-        ax1.plot(results[:, 0], results[:, 1], color=color, marker='.',
-                markersize=2.0, linestyle='solid', linewidth=0.5)
-        ax1.set_xlabel(xlabel)
+
+        # Plot raw temperature values if requested
+        if (dcmtd or smthd) and plot_flag == 'r':
+            time_t = millisecs_t / 1000
+            if time_format == 'd':
+                time_t = [clk_start_dt + dt.timedelta
+                        (seconds=sec) for sec in time_t]
+            ax2.plot(time_t, temperature_raw, color='lightblue', marker='.',
+                    markersize=1.0, linestyle='')
+
+        # Plot final pressure values
+        color = 'red'
         ax1.set_ylabel('Pressure (Pa)', color=color)
         ax1.tick_params(axis='y', labelcolor=color)
         ax1.grid(axis='x')
+        ax1.plot(results[:, 0], results[:, 1], color=color, marker='',
+                markersize=1.0, linestyle='solid', linewidth=0.5)
+        ax1.set_xlabel(xlabel)
 
-        ax2 = ax1.twinx()
+        # Plot final temperature values
         color = 'blue'
-        plt.ylim(t_min, t_max)
         ax2.set_ylabel('Temperature (°C)', color=color)
-        #'''
-        if len(pressure_dcmtd) != 0:
-            ax2.plot(time_t, temperature, color='lightblue', marker='.',
-                    markersize=1.0, linestyle='')
-        #'''
-        ax2.plot(results[:, 0], results[:, 2], color=color, marker='.',
-                markersize=2.0, linestyle='solid', linewidth=0.5)
         ax2.tick_params(axis='y', labelcolor=color)
+        ax2.plot(results[:, 0], results[:, 2], color=color, marker='',
+                markersize=1.0, linestyle='solid', linewidth=0.5)
+
         fig.suptitle(f'{apg_filename}\nBegin: {wndw_begin_dt}  -  '
                     f'End: {wndw_end_dt}')
         fig.tight_layout()
-        # Uncomment the line below if timestamp format is datetime.
-        # plt.gcf().autofmt_xdate()
+        if time_format == 'd':
+            # Rotates and aligns the X-axis labels.
+            plt.gcf().autofmt_xdate(bottom=0.2, rotation=30, ha='right')
         plt.show()
 
     return
