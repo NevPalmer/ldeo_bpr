@@ -69,7 +69,8 @@ def main():
                         default=decmt_intvl)
     parser.add_argument("-t", "--tempsmth",
                         help=f'Temperature smoothing factor (must be an odd '
-                        f'integer). 10001 gives strong smoothing. '
+                        f'integer). 5001 gives sensible smoothing for CSAC logger. '
+                        f'50001 gives sensible smoothing for Seascan logger. '
                         f'Default: "{tmptr_smth_fctr}"',
                         type=int,
                         default=tmptr_smth_fctr)
@@ -156,7 +157,7 @@ def main():
     logger['head_len'] = logger_cfg.getint(logger_version, 'head_len')
     logger['rec_len']  = logger_cfg.getint(logger_version, 'rec_len')
     logger['smpls_per_rec']  = logger_cfg.getint(logger_version, 'smpls_per_rec')
-    logger['sample_epoch']  = logger_cfg.getfloat(logger_version, 'epoch')
+    logger['sample_epoch']  = logger_cfg.getint(logger_version, 'epoch')
     logger['record_epoch']  = logger['sample_epoch']  * logger['smpls_per_rec'] 
     logger['clock_freq']  = logger_cfg.getint(logger_version, 'clock_freq')
     logger['TP_fctr']  = evaluate(logger_cfg.get(logger_version, 'TP_fctr')).item()
@@ -204,7 +205,8 @@ def main():
     print(f'Filesize = {fsize} bytes')
     nrecs = int((fsize - logger['head_len'] ) / logger['rec_len'] )-1
     print(f'Number of records = {nrecs:d}')
-    file_duration_days = nrecs*logger['record_epoch'] /3600000/24
+    file_duration_secs = nrecs*logger['record_epoch'] /1000
+    file_duration_days = file_duration_secs /3600/24
     print(f'File duration = {file_duration_days} days')
     clk_end_dt = clk_start_dt + dt.timedelta(days=file_duration_days)
     print(f'Time of last sample = {clk_end_dt}')
@@ -216,6 +218,7 @@ def main():
               f'GPS time) = {drift}')
 
     # Calculate window for extracting data.
+    wndw_padding = 600 #Seconds
     if args.beginwndw is None:
         wndw_begin_dt = clk_start_dt
     else:
@@ -223,20 +226,36 @@ def main():
         wndw_begin_dt = dt.datetime.strptime(wndw_begin,
                                              '%Y_%m_%d_%H_%M_%S.%f')
     if args.endwndw is None:
+        end_flag = True
         wndw_end_dt = clk_end_dt
     else:
+        end_flag = False
         wndw_end = re.sub('[-: _/]', '_', args.endwndw)
         wndw_end_dt = dt.datetime.strptime(wndw_end, '%Y_%m_%d_%H_%M_%S.%f')
     wndw_begin_secs = ((wndw_begin_dt - clk_start_dt).total_seconds())
     wndw_begin_days = wndw_begin_secs / (24*3600)
-    print(f'Data window beginning as date-time = {wndw_begin_dt}')
-    print(f'Data window beginning in days since clock start: {wndw_begin_days}')
+    print(f'Data window beginning (date-time) = {wndw_begin_dt}')
+    print(f'Data window beginning (days since clock start): {wndw_begin_days}')
     wndw_len_secs = ((wndw_end_dt - wndw_begin_dt).total_seconds())
+    wndw_end_secs = wndw_begin_secs + wndw_len_secs
     wndw_len_days = wndw_len_secs / (24*3600)
-    print(f'Data window length in days: {wndw_len_days}')
-    rec_begin = int(wndw_begin_secs*1000 / logger['record_epoch'] )
-    print(f'First record of data window: {rec_begin}')
-    nrecs_want = int(wndw_len_secs*1000 / logger['record_epoch'] )+1
+    print(f'Data window length (days): {wndw_len_days}')
+
+    # Make sure the requested times don't fall outside available records.
+    if (wndw_begin_secs - wndw_padding) < 0:
+        padded_wndw_begin_secs = 0
+    else:
+        padded_wndw_begin_secs = wndw_begin_secs - wndw_padding
+
+    padded_wndw_len_secs = wndw_end_secs - padded_wndw_begin_secs + wndw_padding
+    # Factors of 1000 included below to fix calculation inaccuracy.
+    avail_wndw_len_secs = (file_duration_secs*1000 - wndw_begin_secs*1000)/1000
+    if (avail_wndw_len_secs - padded_wndw_len_secs) <= 0:
+        padded_wndw_len_secs = padded_wndw_len_secs - wndw_padding
+
+    rec_begin = int(padded_wndw_begin_secs*1000 / logger['record_epoch'])
+    nrecs_want = int(padded_wndw_len_secs*1000 / logger['record_epoch']) + 1
+
 
     # Extract records from APG file for the time window specified.
     print('Extracting raw records:\n', end='')
@@ -259,12 +278,16 @@ def main():
     press_raw = np.cumsum(press_raw, axis=1)
     press_raw = press_raw.reshape((nrecs_want*logger['smpls_per_rec'] ))
     temp_raw = (records[:, tptr_col])
-    ticks = (records[:, last_field - fmt_field['tic']])  # ticks are equivalent to milliseconds
+    ticks = (records[:, last_field - fmt_field['tic']])  # ticks are milliseconds
 
-
-    actual_end_tick = ticks[-1] + (logger['smpls_per_rec']  - 1) * logger['sample_epoch'] 
+    actual_end_tick = ticks[-1]
     actual_begin_tick = ticks[0]
-
+    nominal_begin_tick = rec_begin * logger['record_epoch']
+    nominal_end_tick = (rec_begin + nrecs_want -1) * logger['record_epoch']
+    # print(f'Actual beginning tick:  {actual_begin_tick}')
+    # print(f'Nominal beginning tick: {nominal_begin_tick}')
+    # print(f'Actual end tick:        {actual_end_tick}')
+    # print(f'Nominal end tick:       {nominal_end_tick}')
 
     # Write a summary file showing out of sync tic counts and exit.
     ''' Comment this line for troubleshooting.
@@ -280,8 +303,6 @@ def main():
     summary_ticks = [ticks[0]]
     for i in range(1,len(time_diff)):
         if (time_diff[i] != time_diff[i-1]):
-            #print(f'{time_diff[i]} : {time_diff[i-1]} : '
-            #      f'{time_diff[i] != time_diff[i-1]}')
             summary_ticks.append(ticks[i])
     np.savetxt('summary_ticks.txt', summary_ticks, fmt='%d',
                 header='actual,nominal,difference',
@@ -292,46 +313,68 @@ def main():
     #sys.exit()
     #'''
 
+    nom_ticks_t = np.linspace(nominal_begin_tick,
+                                nominal_end_tick,
+                                num=nrecs_want,
+                                endpoint=True)
+    nom_ticks_p = np.linspace(nominal_begin_tick,
+                                nominal_end_tick + logger['record_epoch'] ,
+                                num=nrecs_want*logger['smpls_per_rec'],
+                                endpoint=False)
+ 
     # If the nominal tick count and actual recorded tick count are not precisely
     # aligned then use linear interpolation to generate a precisely periodic
     # record of raw temperature and pressure values.
-    nominal_begin_tick = rec_begin * logger['record_epoch'] 
-    nominal_end_tick = (rec_begin + nrecs_want -1) * logger['record_epoch'] 
-
-    # print(f'nom_begin: {nominal_begin_tick}\nact_begin: {actual_begin_tick}\n'
-    #       f'nom_end: {nominal_end_tick}\nact_end: {actual_end_tick}\n')
     if (actual_begin_tick == nominal_begin_tick 
         and actual_end_tick == nominal_end_tick):
-        millisecs_t = np.linspace(nominal_begin_tick,
-                                  nominal_end_tick,
-                                  num=nrecs_want,
-                                  endpoint=True)
-        millisecs_p = np.linspace(nominal_begin_tick,
-                                  nominal_end_tick + logger['record_epoch'] ,
-                                  num=nrecs_want*logger['smpls_per_rec'] ,
-                                  endpoint=False)
+        millisecs_t = nom_ticks_t
+        millisecs_p = nom_ticks_p
     else:
+        print(f'NOTE: All times given above are Nominal. All output times are '
+            f'Actual, corrected for clock drift where calculated.\n'
+            f'"Nominal" times are calculated by counting the number '
+            f'of sample epochs multiplied by the sample period '
+            f'({logger["sample_epoch"]} secs).\n'
+            f'"Actual" times are the actual recorded tick count values before any '
+            f'adjustment for clock drift.')
+        beg_diff = nominal_begin_tick - actual_begin_tick
+        if beg_diff < 0:
+            dirn = 'behind'
+        else:
+            dirn = 'ahead'
+        print(f'Nominal time at start of window is {abs(beg_diff)/1000} '
+            f'seconds {dirn} Actual time.')
+        end_diff = nominal_end_tick - actual_end_tick
+        if end_diff < 0:
+            dirn = 'behind'
+        else:
+            dirn = 'ahead'
+        print(f'Nominal time at start of window is {abs(beg_diff)/1000} '
+            f'seconds {dirn} Actual time.')
+    
         # Determine first tick count to achieve fixed period epochs.
-        final_begin_tick = (actual_begin_tick + (logger['record_epoch']  - 
-                            actual_begin_tick % logger['record_epoch'] ))
+        final_begin_tick = (actual_begin_tick + (logger['record_epoch'] - 
+                            actual_begin_tick % logger['record_epoch']))
         # Determine final tick count to achieve fixed period epochs.
-        final_end_tick = (actual_end_tick - (actual_end_tick % logger['record_epoch'] ))
-        epoch_count = int((final_end_tick-final_begin_tick) / logger['record_epoch'] ) + 1
+        final_end_tick = (actual_end_tick - (actual_end_tick % logger['record_epoch']))
+        epoch_count = int((final_end_tick-final_begin_tick) / logger['record_epoch']) + 1
         millisecs_t  = np.linspace(final_begin_tick,
                                    final_end_tick,
                                    num=epoch_count,
                                    endpoint=True)
         millisecs_p  = np.linspace(final_begin_tick,
-                                   final_end_tick + logger['record_epoch'] ,
-                                   num=epoch_count*logger['smpls_per_rec'] ,
+                                   final_end_tick + logger['record_epoch'],
+                                   num=epoch_count*logger['smpls_per_rec'],
                                    endpoint=False)
-        ticks_p = np.linspace(actual_begin_tick,
-                                  actual_end_tick + logger['record_epoch'] ,
-                                  num=nrecs_want*logger['smpls_per_rec'] ,
-                                  endpoint=False)
+        ticks_ext = np.append(ticks,ticks[-1]+logger['record_epoch'])
+        nom_ticks_t = np.append(nom_ticks_t,nom_ticks_t[-1]+logger['record_epoch'])
+
+        ticks_p = np.interp(nom_ticks_p, nom_ticks_t, ticks_ext )
+
         # Interpolate to generate fixed period observation epochs.
         temp_raw = np.interp(millisecs_t, ticks, temp_raw)
         press_raw = np.interp(millisecs_p, ticks_p, press_raw)
+
 
     # Temperature period (usec)
     TP = (temp_raw/(logger['TP_fctr'] )+logger['TP_cnst'] )/(logger['clock_freq'] )
@@ -349,16 +392,17 @@ def main():
     # This eliminates significant noise from the pressure values.
     if tmptr_smth_fctr >= 5:
         print('Applying temperature smoothing filter.')
-        TP_smth = sig.savgol_filter(TP, tmptr_smth_fctr, 3, axis=0, mode='mirror')
+        TP_raw = TP
+        TP = sig.savgol_filter(TP, tmptr_smth_fctr, 3, axis=0, mode='mirror')
+        Uv_raw = TP_raw - paros['U'][0]
+        temperature_raw = np.polyval(paros['Y'], Uv_raw)
 
     # Calculate temperature array
     print('Calculating temperatures and pressures.')
     Uv = TP - paros['U'][0]
-    temperature_raw = np.polyval(paros['Y'], Uv)
-    Uv_smth = TP_smth - paros['U'][0]
     # Upsample temperatures to match frequency of pressure samples by
     #  linear interpolation.
-    Uv_expnd = np.interp(millisecs_p, millisecs_t, Uv_smth)
+    Uv_expnd = np.interp(millisecs_p, millisecs_t, Uv)
     temperature_upsmpld = np.polyval(paros['Y'], Uv_expnd)
     
     # Calculate pressure array
@@ -380,6 +424,20 @@ def main():
         pressure_dcmtd = pressure
         temperature_dcmtd = temperature_upsmpld
         millisecs_dcmtd = millisecs_p
+        # Ensure first record in data arrays starts at a whole multiple of the 
+        # decimation factor.
+        actual_first_tick = millisecs_dcmtd[1]
+        actual_last_tick = millisecs_dcmtd[-1]
+        intvl_ms = decmt_intvl * 1000
+        dcmtd_first_tick = (actual_first_tick + intvl_ms - 
+                            actual_first_tick % intvl_ms)
+        dcmtd_last_tick = (actual_last_tick - (actual_last_tick % intvl_ms))
+        mask = np.logical_and(millisecs_dcmtd >= dcmtd_first_tick,
+                              millisecs_dcmtd <= dcmtd_last_tick)
+        millisecs_dcmtd = millisecs_dcmtd[mask]
+        pressure_dcmtd = pressure_dcmtd[mask]
+        temperature_dcmtd = temperature_dcmtd[mask]
+
         # First decimate to whole seconds
         sample_freq = int(1000/logger['sample_epoch'] )
         decmt_intvl_pre = sample_freq
@@ -431,6 +489,19 @@ def main():
         pressure_out = pressure
         temperature_out = temperature_upsmpld
 
+    # Trim results to the originally specified time window.
+    if end_flag:
+        if decmt_intvl > 0:
+            wndw_end_secs = time[-1] - time[-1] % decmt_intvl
+        else:
+            wndw_end_secs = time[-1]
+    else:
+        wndw_end_secs = wndw_begin_secs + wndw_len_secs
+    mask = np.logical_and(time >= wndw_begin_secs, time <= wndw_end_secs)
+    time = time[mask]
+    pressure_out = pressure_out[mask]
+    temperature_out = temperature_out[mask]
+
     # Convert timestamp from seconds to datetime if specified.
     xlabel = 'Seconds'
     if time_format == 'd':
@@ -439,6 +510,7 @@ def main():
                 (seconds=sec) for sec in time]
         xlabel = 'Date-Time'
 
+
     results = np.column_stack((time, pressure_out, temperature_out))
 
     # Save results to file
@@ -446,6 +518,7 @@ def main():
         print('Saving results to file.')
         np.savetxt(out_filename, results, fmt='%s,%f,%f')
 
+    # Generate and output a plot
     if plot_flag != 'n':
         # Set min-max values for plot Y-axes
         print('Generating plot.')
@@ -516,7 +589,7 @@ def main():
         ax1.set_ylabel('Pressure (Pa)', color=color)
         ax1.tick_params(axis='y', labelcolor=color)
         ax1.grid(axis='x')
-        ax1.plot(results[:, 0], results[:, 1], color=color, marker='',
+        ax1.plot(results[:, 0], results[:, 1], color=color, marker='.',
                 markersize=1.0, linestyle='solid', linewidth=0.5)
         ax1.set_xlabel(xlabel)
 
@@ -524,7 +597,7 @@ def main():
         color = 'blue'
         ax2.set_ylabel('Temperature (°C)', color=color)
         ax2.tick_params(axis='y', labelcolor=color)
-        ax2.plot(results[:, 0], results[:, 2], color=color, marker='',
+        ax2.plot(results[:, 0], results[:, 2], color=color, marker='.',
                 markersize=1.0, linestyle='solid', linewidth=0.5)
 
         fig.suptitle(f'{apg_filename}\nBegin: {wndw_begin_dt}  -  '
@@ -720,7 +793,6 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
         x = np.where(diff_row_increments>1)[0]+1
         x = np.insert(x,0,0)
         poss_sync_row = pcore_diff_row[x]-1
-        print("poss_sync_row: ",poss_sync_row)
 
         # For each poss_sync_row check:
         #   - immed prev row has all Pn values as zero,
