@@ -1,6 +1,6 @@
 #!/home/nevillep/miniconda3/bin/python
 
-# Version 20220310
+# Version 20220315
 # by Neville Palmer, GNS Science
 # 2018/11/17 Start development
 
@@ -214,8 +214,10 @@ def main():
     # Clock drift
     if (args.gpssynctime is not None):
         drift = clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count)
-        print(f'Clock drift in milliseconds (logged time minus actual '
-              f'GPS time) = {drift}')
+        print(f'Clock drift at end of recording in milliseconds:\n'
+              f'   (logged time - actual GPS time) = {drift}')
+    else:
+        drift = 0
 
     # Calculate window for extracting data.
     wndw_padding = 600 #Seconds
@@ -263,7 +265,7 @@ def main():
                              rawbin_flag)
 
     # Save raw records to file as integers with tick rollover removed.
-    ''' Comment this line for troubleshooting.
+    #''' Comment this line for troubleshooting.
     np.savetxt('raw_records_no-rollover.txt', records, fmt='%d',
             header='',
             comments='')
@@ -330,13 +332,15 @@ def main():
         millisecs_t = nom_ticks_t
         millisecs_p = nom_ticks_p
     else:
-        print(f'NOTE: All times given above are Nominal. All output times are '
-            f'Actual, corrected for clock drift where calculated.\n'
+        print(f'NOTE: Nominal record epochs are not precise. The recorded time '
+            f'tick value does not precisely correspond to the nominal epoch count.\n'
+            f'All times given above are Nominal. All output times are '
+            f'Actual times plus correction for clock drift where calculated.\n'
             f'"Nominal" times are calculated by counting the number '
             f'of sample epochs multiplied by the sample period '
             f'({logger["sample_epoch"]} secs).\n'
-            f'"Actual" times are the actual recorded tick count values before any '
-            f'adjustment for clock drift.')
+            f'"Actual" times given here are the actual recorded tick count values '
+            f'before any adjustment for clock drift.')
         beg_diff = nominal_begin_tick - actual_begin_tick
         if beg_diff < 0:
             dirn = 'behind'
@@ -349,7 +353,7 @@ def main():
             dirn = 'behind'
         else:
             dirn = 'ahead'
-        print(f'Nominal time at start of window is {abs(beg_diff)/1000} '
+        print(f'Nominal time at end of window is {abs(end_diff)/1000} '
             f'seconds {dirn} Actual time.')
     
         # Determine first tick count to achieve fixed period epochs.
@@ -374,7 +378,23 @@ def main():
         # Interpolate to generate fixed period observation epochs.
         temp_raw = np.interp(millisecs_t, ticks, temp_raw)
         press_raw = np.interp(millisecs_p, ticks_p, press_raw)
-
+    
+    # Apply clock drift to time values
+    # Clock drift is fixed at the mid-point of the period of extracted data
+    # and any change is assumed to be insignificant over that period.
+    millisecs_logged = ((gpssync_dt - clk_start_dt).total_seconds()) * 1000
+    drift_beg = drift * (millisecs_t[0] / millisecs_logged)
+    drift_end = drift * (millisecs_t[-1] / millisecs_logged)
+    print(f'Clock drift at beginning of extracted block: {drift_beg} ms.')
+    print(f'Clock drift at end of extracted block:       {drift_end} ms.')
+    drift_applied = (drift_beg + drift_end) / 2
+    # Round the drift to be applied to the  nearest whole sample epoch.
+    drift_applied = logger['sample_epoch'] * round(drift_applied / logger['sample_epoch'],0)
+    print(f'Clock drift applied to the extracted block:  {drift_applied} ms.')
+    # Apply closk drift to time records.
+    millisecs_p = millisecs_p - drift_applied
+    millisecs_t = millisecs_t - drift_applied
+    
 
     # Temperature period (usec)
     TP = (temp_raw/(logger['TP_fctr'] )+logger['TP_cnst'] )/(logger['clock_freq'] )
@@ -774,7 +794,7 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
         sync_records = extractrecords(apg_filename, logger, nrecs_want, rec_begin,
                              False)
         # Save raw records to file as integers with tick rollover removed.
-        #''' Comment this line for troubleshooting.
+        ''' Comment this line for troubleshooting.
         np.savetxt('raw_sync_records.txt', sync_records, fmt='%d',
                 header='',
                 comments='')
@@ -836,9 +856,9 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
 
         nonzero = (np.where(pn!=0)[0])
         if nonzero.any():
-            i = len(pn)+1 - nonzero.size
+            i = logger['smpls_per_rec'] - nonzero.size
         else:
-            i = len(pn)+1
+            i = logger['smpls_per_rec']
 
         sync_tick_count = sync_block[tick_col] + (i * logger['sample_epoch'])
         sync_tick_count = int(sync_tick_count)
