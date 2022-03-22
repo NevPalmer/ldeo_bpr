@@ -1,5 +1,7 @@
 #!/home/nevillep/miniconda3/bin/python
-
+'''
+A script for extracting raw data from LDEO type APG data loggers.
+'''
 # Version 20220315
 # by Neville Palmer, GNS Science
 # 2018/11/17 Start development
@@ -13,16 +15,18 @@ import datetime as dt
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.signal as sig
+import obspy
 from numexpr import evaluate
 
 
 def main():
-    # Default values and choices for reading params from command line.
+    '''Default values and choices for reading params from command line.'''
     apg_ini = './ParosAPG.ini'
     logger_ini = './APGlogger.ini'
     logger_versions = ['CSAC2013', 'Seascan2018']
     clk_start = '2000-01-01_00:00:00'  # 'YYYY-MM-DD_hh:mm:ss'
     out_filename = ''
+    mseed_filename = ''
     tmptr_smth_fctr = 1
     decmt_intvl = 0
 
@@ -98,10 +102,18 @@ def main():
                         'at GPSSYNCTIME. This parameter is ignored if '
                         'GPSSYNCTIME is omitted. Format: "0xHHHHHHHHHH"',
                         type=lambda x: int(x, 0))
+    parser.add_argument("-n", "--station",
+                        help='Station name to be used in MiniSEED file header. '
+                        'Max 5 characters.',
+                        default="")
     parser.add_argument("-o", "--outfile",
                         help='Full path and filename for output file. No file '
                         'will be generated if not specified.',
                         default=out_filename)
+    parser.add_argument("-m", "--mseedfile",
+                        help='Full path and filename for MiniSEED file. No file '
+                        'will be generated if not specified.',
+                        default=mseed_filename)
     parser.add_argument("-f", "--fmttime",
                         help='Specify the format to be used for presenting time '
                         'in outputs and plots, to be displayed as either '
@@ -134,8 +146,11 @@ def main():
         gpssynctime = re.sub('[-: _/]', '_', args.gpssynctime)
         gpssync_dt = dt.datetime.strptime(gpssynctime, '%Y_%j_%H_%M_%S')
     sync_tick_count = args.synctickcount
+    stn_name = args.station.strip()
     if args.outfile:
         out_filename = os.path.normpath(args.outfile)
+    if args.mseedfile:
+        mseed_filename = os.path.normpath(args.mseedfile)
     time_format = args.fmttime.strip()
     plot_flag = args.plot.strip()
     rawbin_flag = args.rawbinary
@@ -158,7 +173,7 @@ def main():
     logger['rec_len']  = logger_cfg.getint(logger_version, 'rec_len')
     logger['smpls_per_rec']  = logger_cfg.getint(logger_version, 'smpls_per_rec')
     logger['sample_epoch']  = logger_cfg.getint(logger_version, 'epoch')
-    logger['record_epoch']  = logger['sample_epoch']  * logger['smpls_per_rec'] 
+    logger['record_epoch']  = logger['sample_epoch']  * logger['smpls_per_rec']
     logger['clock_freq']  = logger_cfg.getint(logger_version, 'clock_freq')
     logger['TP_fctr']  = evaluate(logger_cfg.get(logger_version, 'TP_fctr')).item()
     logger['TP_cnst']  = logger_cfg.getfloat(logger_version, 'TP_cnst')
@@ -173,7 +188,7 @@ def main():
     fmt_field['tptr'] = logger_cfg.getint(logger_version, 'temperature_field')
     fmt_field['pcore'] = logger_cfg.getint(logger_version, 'pcore_field')
     fmt_field['pn'] = logger_cfg.getint(logger_version, 'pn_field')
-    if (abs(fmt_field['pcore']-fmt_field['pn']+1) != logger['smpls_per_rec'] ):
+    if abs(fmt_field['pcore']-fmt_field['pn']+1) != logger['smpls_per_rec']:
         sys.exit(f"The number of samples per record ({logger['smpls_per_rec'] }) "
                  f"for logger {logger_version}, does "
                  f"not match the number of Pcore and Pn fields in the "
@@ -181,7 +196,7 @@ def main():
                  f"{fmt_field['pcore']-fmt_field['pn']+1}), "
                  f"as provided in file {logger_ini}.")
     rec_fmt_bits = int(sum(map(abs, logger['rec_fmt'] )))
-    if (rec_fmt_bits != (logger['rec_len'] *8)):
+    if rec_fmt_bits != (logger['rec_len'] *8):
         sys.exit(f"The total number of bits ({rec_fmt_bits}) given by the "
                  f"record format {logger['rec_fmt'] } "
                  f"does not equal the record length ({logger['rec_len'] } bytes x 8), "
@@ -200,7 +215,7 @@ def main():
     # Calculate duration and end time of raw file.
     try:
         fsize = os.path.getsize(apg_filename)  # file size in bytes
-    except(FileNotFoundError):
+    except FileNotFoundError:
         sys.exit(f'Raw APG file "{apg_filename}" does not exist.')
     print(f'Filesize = {fsize} bytes')
     nrecs = int((fsize - logger['head_len'] ) / logger['rec_len'] )-1
@@ -212,7 +227,7 @@ def main():
     print(f'Time of last sample = {clk_end_dt}')
 
     # Clock drift
-    if (args.gpssynctime is not None):
+    if args.gpssynctime is not None:
         drift = clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count)
         print(f'Clock drift at end of recording in milliseconds:\n'
               f'   (logged time - actual GPS time) = {drift}')
@@ -323,11 +338,11 @@ def main():
                                 nominal_end_tick + logger['record_epoch'] ,
                                 num=nrecs_want*logger['smpls_per_rec'],
                                 endpoint=False)
- 
+
     # If the nominal tick count and actual recorded tick count are not precisely
     # aligned then use linear interpolation to generate a precisely periodic
     # record of raw temperature and pressure values.
-    if (actual_begin_tick == nominal_begin_tick 
+    if (actual_begin_tick == nominal_begin_tick
         and actual_end_tick == nominal_end_tick):
         millisecs_t = nom_ticks_t
         millisecs_p = nom_ticks_p
@@ -355,9 +370,9 @@ def main():
             dirn = 'ahead'
         print(f'Nominal time at end of window is {abs(end_diff)/1000} '
             f'seconds {dirn} Actual time.')
-    
+
         # Determine first tick count to achieve fixed period epochs.
-        final_begin_tick = (actual_begin_tick + (logger['record_epoch'] - 
+        final_begin_tick = (actual_begin_tick + (logger['record_epoch'] -
                             actual_begin_tick % logger['record_epoch']))
         # Determine final tick count to achieve fixed period epochs.
         final_end_tick = (actual_end_tick - (actual_end_tick % logger['record_epoch']))
@@ -378,15 +393,15 @@ def main():
         # Interpolate to generate fixed period observation epochs.
         temp_raw = np.interp(millisecs_t, ticks, temp_raw)
         press_raw = np.interp(millisecs_p, ticks_p, press_raw)
-    
+
     # Apply clock drift to time values
     # Clock drift is fixed at the mid-point of the period of extracted data
     # and any change is assumed to be insignificant over that period.
     millisecs_logged = ((gpssync_dt - clk_start_dt).total_seconds()) * 1000
     drift_beg = drift * (millisecs_t[0] / millisecs_logged)
     drift_end = drift * (millisecs_t[-1] / millisecs_logged)
-    print(f'Clock drift at beginning of extracted block: {drift_beg} ms.')
-    print(f'Clock drift at end of extracted block:       {drift_end} ms.')
+    #print(f'Clock drift at beginning of extracted block: {drift_beg} ms.')
+    #print(f'Clock drift at end of extracted block:       {drift_end} ms.')
     drift_applied = (drift_beg + drift_end) / 2
     # Round the drift to be applied to the  nearest whole sample epoch.
     drift_applied = logger['sample_epoch'] * round(drift_applied / logger['sample_epoch'],0)
@@ -394,7 +409,7 @@ def main():
     # Apply closk drift to time records.
     millisecs_p = millisecs_p - drift_applied
     millisecs_t = millisecs_t - drift_applied
-    
+
 
     # Temperature period (usec)
     TP = (temp_raw/(logger['TP_fctr'] )+logger['TP_cnst'] )/(logger['clock_freq'] )
@@ -424,7 +439,7 @@ def main():
     #  linear interpolation.
     Uv_expnd = np.interp(millisecs_p, millisecs_t, Uv)
     temperature_upsmpld = np.polyval(paros['Y'], Uv_expnd)
-    
+
     # Calculate pressure array
     Cv = np.polyval(paros['C'], Uv_expnd)
     Dv = np.polyval(paros['D'], Uv_expnd)
@@ -444,12 +459,12 @@ def main():
         pressure_dcmtd = pressure
         temperature_dcmtd = temperature_upsmpld
         millisecs_dcmtd = millisecs_p
-        # Ensure first record in data arrays starts at a whole multiple of the 
+        # Ensure first record in data arrays starts at a whole multiple of the
         # decimation factor.
         actual_first_tick = millisecs_dcmtd[1]
         actual_last_tick = millisecs_dcmtd[-1]
         intvl_ms = decmt_intvl * 1000
-        dcmtd_first_tick = (actual_first_tick + intvl_ms - 
+        dcmtd_first_tick = (actual_first_tick + intvl_ms -
                             actual_first_tick % intvl_ms)
         dcmtd_last_tick = (actual_last_tick - (actual_last_tick % intvl_ms))
         mask = np.logical_and(millisecs_dcmtd >= dcmtd_first_tick,
@@ -517,7 +532,7 @@ def main():
             wndw_end_secs = time[-1]
     else:
         wndw_end_secs = wndw_begin_secs + wndw_len_secs
-    mask = np.logical_and(time >= wndw_begin_secs, time <= wndw_end_secs)
+    mask = np.logical_and(time >= wndw_begin_secs, time < wndw_end_secs)
     time = time[mask]
     pressure_out = pressure_out[mask]
     temperature_out = temperature_out[mask]
@@ -533,10 +548,35 @@ def main():
 
     results = np.column_stack((time, pressure_out, temperature_out))
 
-    # Save results to file
+    # Save results to CSV file
     if out_filename:
-        print('Saving results to file.')
+        print('Saving results to CSV file.')
         np.savetxt(out_filename, results, fmt='%s,%f,%f')
+
+    # Save results to MiniSEED file
+    if mseed_filename:
+        print('Saving results to MiniSEED file.')
+        stats = {
+                'network': '',
+                'station': stn_name,
+                'location': '',
+                'sampling_rate': 1000/logger['sample_epoch'],
+                'starttime': wndw_begin_dt,
+                'mseed': {'dataquality': 'R'}
+                }
+        stats_p = stats.copy()
+        stats_p['channel'] = 'HDP'
+        stats_t = stats.copy()
+        stats_t['channel'] = 'HKC'
+
+        trace_p = obspy.Trace(data=results[:,1], header=stats_p)
+        trace_t = obspy.Trace(data=results[:,2], header=stats_t)
+        stream = obspy.Stream(traces=[trace_p,trace_t])
+
+        stream.write(mseed_filename, format='MSEED')
+
+        # Uncomment line below to see MiniSEED plot output.
+        #stream.plot()
 
     # Generate and output a plot
     if plot_flag != 'n':
@@ -651,12 +691,12 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, rawbin_flag):
                     #hex_str += hex(ch)+' '
                     bin_str += f'{ch:08b}'
                 #print(hex_str)
-                cum_rec_fmt = np.cumsum(list(map(abs,logger['rec_fmt'] )))
+                cum_rec_fmt = [abs(ele) for ele in logger['rec_fmt']]
                 new_bin_str = ''
-                for i in range( len(bin_str) ):
-                    if i in cum_rec_fmt:
+                for count,char in enumerate(bin_str):
+                    if count in cum_rec_fmt:
                         new_bin_str = new_bin_str + ' '
-                    new_bin_str = new_bin_str + bin_str[i]
+                    new_bin_str = new_bin_str + char
                 print(new_bin_str)
 
             # Split record into array of ints defined as groups of bits
@@ -707,8 +747,8 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, rawbin_flag):
 
 
         # Remove tick count rollovers and make actual ticks continuously increasing.
-        nominal_begin_tick = rec_begin * logger['record_epoch'] 
-        nominal_end_tick = (rec_begin + nrecs_want -1) * logger['record_epoch'] 
+        nominal_begin_tick = rec_begin * logger['record_epoch']
+        nominal_end_tick = (rec_begin + nrecs_want -1) * logger['record_epoch']
         # print(f'Tick field length (in bits): {tic_field_len}')
         rollover_period = 2 ** logger['tic_bit_len']  # in millisec
         # print(f'Rollover length (in millisec/ticks): {rollover_period}')
@@ -733,7 +773,7 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, rawbin_flag):
             if rollovers.size == 0:
                 ticks = ticks + rollover_period * cumtv_rollovers
             else:
-                ticks[0:rollovers[0]] = (ticks[0:rollovers[0]] 
+                ticks[0:rollovers[0]] = (ticks[0:rollovers[0]]
                                         + rollover_period * cumtv_rollovers)
 
         for idx, rollover in np.ndenumerate(rollovers):
@@ -743,18 +783,18 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, rawbin_flag):
                 nxt_rollover = rollovers[idx[0]+1]
             #print(rollover, nxt_rollover)
             # If the tick count does not rollover cleanly and takes more than one
-            # record to reset to zero, then for first record after the rollover 
+            # record to reset to zero, then for first record after the rollover
             # calc as the previous cumulative tick count plus a std record period.
             if nxt_rollover - rollover == 1:
-                ticks[rollover] = ticks[rollover-1] + logger['record_epoch'] 
+                ticks[rollover] = ticks[rollover-1] + logger['record_epoch']
             else:
                 cumtv_rollovers = cumtv_rollovers + 1
-                ticks[rollover:nxt_rollover] = (ticks[rollover:nxt_rollover] 
+                ticks[rollover:nxt_rollover] = (ticks[rollover:nxt_rollover]
                                             + rollover_period * cumtv_rollovers)
 
     records[:, -1] = ticks
 
-    return(records)
+    return records
 
 
 #####################################################################
@@ -771,10 +811,10 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
     count when this frequency starts is detected in the data and this value
     is used in place of sync_tick_count.
     '''
-    
+
     millisecs_logged = ((gpssync_dt - clk_start_dt).total_seconds()) * 1000
 
-    if (sync_tick_count is None):
+    if sync_tick_count is None:
         # Assign names to column numbers of raw data array.
         # Note that raw data array columns are reverse order to raw binary.
         last_field = len(logger['rec_fmt'] ) - 1
@@ -790,7 +830,7 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
         wndw_begin_secs = wndw_begin_secs - (sync_wndw_secs)
         rec_begin = int(wndw_begin_secs*1000 / logger['record_epoch'] )
         nrecs_want = int(sync_wndw_secs*2000 / logger['record_epoch'] )+1
-        
+
         sync_records = extractrecords(apg_filename, logger, nrecs_want, rec_begin,
                              False)
         # Save raw records to file as integers with tick rollover removed.
@@ -799,9 +839,9 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
                 header='',
                 comments='')
         #'''
-        
-        # Identify the start of the record block where the pressure values 
-        # start changing again (ie This is where frequency injection for time 
+
+        # Identify the start of the record block where the pressure values
+        # start changing again (ie This is where frequency injection for time
         # sync occurs).
         # Identify all consecutive row pairs where p_core changes.
         pcore_diff = np.diff(sync_records[:,pcore_col])
@@ -835,7 +875,7 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
             else:
                 prev_pn = prev_block[pcore_col-1:pn_col-1:-1]
                 next_pn = next_block[pcore_col-1:pn_col-1:-1]
-            
+
             prev_nonzero = (np.where(prev_pn!=0)[0])
             next_nonzero = (np.where(next_pn!=0)[0])
             if not prev_nonzero.any() and next_nonzero.any():
@@ -871,7 +911,7 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
     # APG logger clock offset relative to GPS time (positive = APG > GPS)
     clk_drift_at_end = int(sync_tick_count - (millisecs_logged))
 
-    return(clk_drift_at_end)
+    return clk_drift_at_end
 
 
 ##########################
