@@ -25,8 +25,9 @@ def main():
     logger_ini = './APGlogger.ini'
     logger_versions = ['CSAC2013', 'Seascan2018']
     clk_start = '2000-01-01_00:00:00'  # 'YYYY-MM-DD_hh:mm:ss'
+    bin_delta_secs = 0
     out_filename = ''
-    mseed_filename = ''
+    mseed_path = ''
     tmptr_smth_fctr = 1
     decmt_intvl = 0
 
@@ -90,6 +91,14 @@ def main():
                         help='Date and time to end data extraction. Assumes '
                         'end of file if omitted. '
                         'Format: "YYYY-MM-DD_hh:mm:ss.s"')
+    parser.add_argument("-B", "--bininterval",
+                        help='The Bin Interval defines the period of data that '
+                        'will be processed at each iteration. Each bin period '
+                        'processed will be appended to the output CSV file if '
+                        'specified. If specified, multiple MiniSEED files will '
+                        'be created, one for each Bin extracted.'
+                        'Format: "##[DHM]" where ## is an integer and character '
+                        'D, H or M indicates Days, Hours or Minutes.')
     parser.add_argument("-g", "--gpssynctime",
                         help='Precise date and time from GPS clock for '
                         'syncronising end time. No clock drift adjustment is '
@@ -110,10 +119,10 @@ def main():
                         help='Full path and filename for output file. No file '
                         'will be generated if not specified.',
                         default=out_filename)
-    parser.add_argument("-m", "--mseedfile",
-                        help='Full path and filename for MiniSEED file. No file '
-                        'will be generated if not specified.',
-                        default=mseed_filename)
+    parser.add_argument("-m", "--mseedpath",
+                        help='Full path of location to save MiniSEED file(s). '
+                        'No file(s) will be generated if not specified.',
+                        default=mseed_path)
     parser.add_argument("-f", "--fmttime",
                         help='Specify the format to be used for presenting time '
                         'in outputs and plots, to be displayed as either '
@@ -142,6 +151,18 @@ def main():
     tmptr_smth_fctr = args.tempsmth
     clk_start = re.sub('[-: _/]', '_', args.clkstart)
     clk_start_dt = dt.datetime.strptime(clk_start, '%Y_%m_%d_%H_%M_%S')
+    if args.bininterval:
+        bin_int = args.bininterval.strip().upper()
+        if bin_int[-1] == 'D':
+            bin_delta = dt.timedelta(days=int(bin_int[0:-1]))
+        elif bin_int[-1] == 'H':
+            bin_delta = dt.timedelta(hours=int(bin_int[0:-1]))
+        elif bin_int[-1] == 'M':
+            bin_delta = dt.timedelta(minutes=int(bin_int[0:-1]))
+        else:
+            sys.exit(f'"{bin_int}" is not a valid format for -bininterval.')
+        bin_delta_secs = bin_delta.total_seconds()
+
     if args.gpssynctime:
         gpssynctime = re.sub('[-: _/]', '_', args.gpssynctime)
         gpssync_dt = dt.datetime.strptime(gpssynctime, '%Y_%j_%H_%M_%S')
@@ -149,8 +170,13 @@ def main():
     stn_name = args.station.strip()
     if args.outfile:
         out_filename = os.path.normpath(args.outfile)
-    if args.mseedfile:
-        mseed_filename = os.path.normpath(args.mseedfile)
+    if args.mseedpath:
+        if not args.station:
+            sys.exit(
+                'A station name must be specified using parameter --station '
+                'when genrating a MiniSEED file.'
+            )
+        mseed_path = os.path.normpath(args.mseedpath)
     time_format = args.fmttime.strip()
     plot_flag = args.plot.strip()
     rawbin_flag = args.rawbinary
@@ -204,14 +230,6 @@ def main():
     logger['fmt_field'] = fmt_field
     logger['tic_bit_len'] = logger['rec_fmt'] [fmt_field['tic']]
 
-    # Assign names to column numbers of raw data array.
-    # Note that raw data array columns are reverse order to raw binary.
-    last_field = len(logger['rec_fmt'] ) - 1
-    pcore_col = last_field - fmt_field['pcore']
-    pn_col = last_field - fmt_field['pn']
-    tptr_col = last_field - fmt_field['tptr']
-
-
     # Calculate duration and end time of raw file.
     try:
         fsize = os.path.getsize(apg_filename)  # file size in bytes
@@ -226,27 +244,14 @@ def main():
     clk_end_dt = clk_start_dt + dt.timedelta(days=file_duration_days)
     print(f'Time of last sample = {clk_end_dt}')
 
-    # Clock drift
-    if args.gpssynctime is not None:
-        drift = clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count)
-        print(f'Clock drift at end of recording in milliseconds:\n'
-              f'   (logged time - actual GPS time) = {drift}')
-    else:
-        drift = 0
-
-    # Calculate window for extracting data.
-    wndw_padding = 600 #Seconds
     if args.beginwndw is None:
         wndw_begin_dt = clk_start_dt
     else:
         wndw_begin = re.sub('[-: _/]', '_', args.beginwndw)
-        wndw_begin_dt = dt.datetime.strptime(wndw_begin,
-                                             '%Y_%m_%d_%H_%M_%S.%f')
+        wndw_begin_dt = dt.datetime.strptime(wndw_begin, '%Y_%m_%d_%H_%M_%S.%f')
     if args.endwndw is None:
-        end_flag = True
         wndw_end_dt = clk_end_dt
     else:
-        end_flag = False
         wndw_end = re.sub('[-: _/]', '_', args.endwndw)
         wndw_end_dt = dt.datetime.strptime(wndw_end, '%Y_%m_%d_%H_%M_%S.%f')
     wndw_begin_secs = ((wndw_begin_dt - clk_start_dt).total_seconds())
@@ -254,30 +259,116 @@ def main():
     print(f'Data window beginning (date-time) = {wndw_begin_dt}')
     print(f'Data window beginning (days since clock start): {wndw_begin_days}')
     wndw_len_secs = ((wndw_end_dt - wndw_begin_dt).total_seconds())
-    wndw_end_secs = wndw_begin_secs + wndw_len_secs
     wndw_len_days = wndw_len_secs / (24*3600)
     print(f'Data window length (days): {wndw_len_days}')
 
-    # Make sure the requested times don't fall outside available records.
-    if (wndw_begin_secs - wndw_padding) < 0:
-        padded_wndw_begin_secs = 0
+
+    # Clock drift
+    if args.gpssynctime is not None:
+        drift = clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count)
+        print(f'Clock drift at end of recording in milliseconds:\n'
+              f'   (logged time - actual GPS time) = {drift}')
     else:
-        padded_wndw_begin_secs = wndw_begin_secs - wndw_padding
+        drift = 0
+        gpssync_dt = clk_end_dt
 
-    padded_wndw_len_secs = wndw_end_secs - padded_wndw_begin_secs + wndw_padding
-    # Factors of 1000 included below to fix calculation inaccuracy.
-    avail_wndw_len_secs = (file_duration_secs*1000 - wndw_begin_secs*1000)/1000
-    if (avail_wndw_len_secs - padded_wndw_len_secs) <= 0:
-        padded_wndw_len_secs = padded_wndw_len_secs - wndw_padding
+    # Loop to extract data in time bins
+    if out_filename:
+        open(out_filename, 'w').close() # Create empty file, overwrite if exists.
+    wndw_beg_unix = wndw_begin_dt.replace(tzinfo=dt.timezone.utc).timestamp()
+    wndw_end_unix = wndw_end_dt.replace(tzinfo=dt.timezone.utc).timestamp()
+    bin_beg_unix = wndw_beg_unix
+    if bin_delta_secs == 0:
+        bin_end_unix = wndw_end_unix
+    else:
+        bin_end_unix = bin_beg_unix - (bin_beg_unix % bin_delta_secs) + bin_delta_secs
+    while bin_beg_unix < wndw_end_unix:
+        if bin_end_unix > wndw_end_unix:
+            bin_end_unix = wndw_end_unix
+        bin_begin_dt = dt.datetime.utcfromtimestamp(bin_beg_unix)
+        bin_end_dt = dt.datetime.utcfromtimestamp(bin_end_unix)
+        print(
+            f'=============================================\n'
+            f'Processing time bin: '
+            f'start: {bin_begin_dt} | '
+            f'end: {bin_end_dt}'
+            )
 
-    rec_begin = int(padded_wndw_begin_secs*1000 / logger['record_epoch'])
-    nrecs_want = int(padded_wndw_len_secs*1000 / logger['record_epoch']) + 1
+        generate_results(
+            logger,
+            paros,
+            stn_name,
+            fmt_field,
+            clk_start_dt,
+            bin_begin_dt,
+            bin_end_dt,
+            file_duration_secs,
+            gpssync_dt,
+            drift,
+            press_conv_fctr,
+            apg_filename,
+            rawbin_flag,
+            decmt_intvl,
+            tmptr_smth_fctr,
+            time_format,
+            plot_flag,
+            out_filename,
+            mseed_path,
+        )
 
+        bin_beg_unix = bin_end_unix
+        bin_end_unix = bin_beg_unix + bin_delta_secs
+
+
+################################################################################
+def generate_results(
+        logger,
+        paros,
+        stn_name,
+        fmt_field,
+        clk_start_dt,
+        bin_begin_dt,
+        bin_end_dt,
+        file_duration_secs,
+        gpssync_dt,
+        drift,
+        press_conv_fctr,
+        apg_filename,
+        rawbin_flag,
+        decmt_intvl,
+        tmptr_smth_fctr,
+        time_format,
+        plot_flag,
+        out_filename,
+        mseed_path,
+        ):
+    '''This is the primary function used to extract and output results.'''
+    # Calculate window for extracting data.
+    bin_padding = 600 #Seconds
+    bin_begin_secs = ((bin_begin_dt - clk_start_dt).total_seconds())
+    print(f'Data bin beginning (date-time) = {bin_begin_dt}')
+    bin_len_secs = ((bin_end_dt - bin_begin_dt).total_seconds())
+    bin_end_secs = bin_begin_secs + bin_len_secs
+
+    # Make sure the requested times don't fall outside available records.
+    if (bin_begin_secs - bin_padding) < 0:
+        padded_bin_begin_secs = 0
+    else:
+        padded_bin_begin_secs = bin_begin_secs - bin_padding
+
+    padded_bin_len_secs = bin_end_secs - padded_bin_begin_secs + bin_padding
+    # Factors of 1000 included below to fix floating point rounding error.
+    avail_bin_len_secs = (file_duration_secs*1000 - bin_begin_secs*1000)/1000
+    if (avail_bin_len_secs - padded_bin_len_secs) <= 0:
+        padded_bin_len_secs = padded_bin_len_secs - bin_padding
+
+    rec_begin = int(padded_bin_begin_secs*1000 / logger['record_epoch'])
+    nrecs_want = int(padded_bin_len_secs*1000 / logger['record_epoch']) + 1
 
     # Extract records from APG file for the time window specified.
     print('Extracting raw records:\n', end='')
     records = extractrecords(apg_filename, logger, nrecs_want, rec_begin,
-                             rawbin_flag)
+                            rawbin_flag)
 
     # Save raw records to file as integers with tick rollover removed.
     #''' Comment this line for troubleshooting.
@@ -286,6 +377,13 @@ def main():
             comments='')
     #'''
 
+
+    # Assign names to column numbers of raw data array.
+    # Note that raw data array columns are reverse order to raw binary.
+    last_field = len(logger['rec_fmt'] ) - 1
+    pcore_col = last_field - fmt_field['pcore']
+    pn_col = last_field - fmt_field['pn']
+    tptr_col = last_field - fmt_field['tptr']
 
     # Create an array for each raw observable (pressure, temperature, ticks)
     if pn_col > pcore_col:
@@ -309,12 +407,12 @@ def main():
     # Write a summary file showing out of sync tic counts and exit.
     ''' Comment this line for troubleshooting.
     millisecs_t = np.linspace(nominal_begin_tick, nominal_end_tick,
-                              num=nrecs_want,
-                              endpoint=True)
+                            num=nrecs_want,
+                            endpoint=True)
     millisecs_p = np.linspace(nominal_begin_tick,
-                              nominal_end_tick + logger['record_epoch'] ,
-                              num=nrecs_want*logger['smpls_per_rec'] ,
-                              endpoint=False)
+                            nominal_end_tick + logger['record_epoch'] ,
+                            num=nrecs_want*logger['smpls_per_rec'] ,
+                            endpoint=False)
     time_diff = ticks - millisecs_t
     ticks = np.column_stack((ticks,millisecs_t,time_diff))
     summary_ticks = [ticks[0]]
@@ -378,13 +476,13 @@ def main():
         final_end_tick = (actual_end_tick - (actual_end_tick % logger['record_epoch']))
         epoch_count = int((final_end_tick-final_begin_tick) / logger['record_epoch']) + 1
         millisecs_t  = np.linspace(final_begin_tick,
-                                   final_end_tick,
-                                   num=epoch_count,
-                                   endpoint=True)
+                                final_end_tick,
+                                num=epoch_count,
+                                endpoint=True)
         millisecs_p  = np.linspace(final_begin_tick,
-                                   final_end_tick + logger['record_epoch'],
-                                   num=epoch_count*logger['smpls_per_rec'],
-                                   endpoint=False)
+                                final_end_tick + logger['record_epoch'],
+                                num=epoch_count*logger['smpls_per_rec'],
+                                endpoint=False)
         ticks_ext = np.append(ticks,ticks[-1]+logger['record_epoch'])
         nom_ticks_t = np.append(nom_ticks_t,nom_ticks_t[-1]+logger['record_epoch'])
 
@@ -455,7 +553,7 @@ def main():
     pressure_dcmtd = []
     if decmt_intvl > 0:
         print(f'Decimating results to {decmt_intvl} second epochs by '
-              f'iteration, using factors;', end='', flush=True)
+            f'iteration, using factors;', end='', flush=True)
         pressure_dcmtd = pressure
         temperature_dcmtd = temperature_upsmpld
         millisecs_dcmtd = millisecs_p
@@ -468,7 +566,7 @@ def main():
                             actual_first_tick % intvl_ms)
         dcmtd_last_tick = (actual_last_tick - (actual_last_tick % intvl_ms))
         mask = np.logical_and(millisecs_dcmtd >= dcmtd_first_tick,
-                              millisecs_dcmtd <= dcmtd_last_tick)
+                            millisecs_dcmtd <= dcmtd_last_tick)
         millisecs_dcmtd = millisecs_dcmtd[mask]
         pressure_dcmtd = pressure_dcmtd[mask]
         temperature_dcmtd = temperature_dcmtd[mask]
@@ -487,9 +585,9 @@ def main():
             first = False
             print(f' {decmt_fctr}', end='', flush=True)
             pressure_dcmtd = sig.decimate(pressure_dcmtd, decmt_fctr,
-                                          n=5, ftype='iir')
+                                        n=5, ftype='iir')
             temperature_dcmtd = sig.decimate(temperature_dcmtd, decmt_fctr,
-                                          n=5, ftype='iir')
+                                        n=5, ftype='iir')
             millisecs_dcmtd = millisecs_dcmtd[::decmt_fctr]
             decmt_intvl_pre = decmt_intvl_pre // decmt_fctr
         # Now decimate to number of whole seconds requested
@@ -504,13 +602,13 @@ def main():
                 decmt_fctr = decmt_intvl
             else:
                 sys.exit('\nDecimation failed! The interval specified must be '
-                         'a single digit number of minutes or seconds, or be '
-                         'divisible by 5 or 10.')
+                        'a single digit number of minutes or seconds, or be '
+                        'divisible by 5 or 10.')
             print(f' : {decmt_fctr}', end='', flush=True)
             pressure_dcmtd = sig.decimate(pressure_dcmtd, decmt_fctr,
-                                          n=5, ftype='iir')
+                                        n=5, ftype='iir')
             temperature_dcmtd = sig.decimate(temperature_dcmtd, decmt_fctr,
-                                          n=5, ftype='iir')
+                                        n=5, ftype='iir')
             millisecs_dcmtd = millisecs_dcmtd[::decmt_fctr]
             decmt_intvl = decmt_intvl // decmt_fctr
         print()
@@ -525,14 +623,8 @@ def main():
         temperature_out = temperature_upsmpld
 
     # Trim results to the originally specified time window.
-    if end_flag:
-        if decmt_intvl > 0:
-            wndw_end_secs = time[-1] - time[-1] % decmt_intvl
-        else:
-            wndw_end_secs = time[-1]
-    else:
-        wndw_end_secs = wndw_begin_secs + wndw_len_secs
-    mask = np.logical_and(time >= wndw_begin_secs, time < wndw_end_secs)
+    bin_end_secs = bin_begin_secs + bin_len_secs
+    mask = np.logical_and(time >= bin_begin_secs, time < bin_end_secs)
     time = time[mask]
     pressure_out = pressure_out[mask]
     temperature_out = temperature_out[mask]
@@ -541,27 +633,27 @@ def main():
     xlabel = 'Seconds'
     if time_format == 'd':
         print('Calculating a timestamp array from the seconds array.')
-        time = [clk_start_dt + dt.timedelta
-                (seconds=sec) for sec in time]
+        time = [clk_start_dt + dt.timedelta(seconds=sec)
+                for sec in time]
         xlabel = 'Date-Time'
-
-
-    results = np.column_stack((time, pressure_out, temperature_out))
 
     # Save results to CSV file
     if out_filename:
-        print('Saving results to CSV file.')
-        np.savetxt(out_filename, results, fmt='%s,%f,%f')
+        print(f'Appending results to file "{out_filename}".')
+        with open(out_filename,'ab') as outfile:
+            np.savetxt(
+                outfile,
+                np.column_stack((time, pressure_out, temperature_out)),
+                fmt='%s,%f,%f')
 
     # Save results to MiniSEED file
-    if mseed_filename:
-        print('Saving results to MiniSEED file.')
+    if mseed_path:
         stats = {
                 'network': '',
                 'station': stn_name,
                 'location': '',
                 'sampling_rate': 1000/logger['sample_epoch'],
-                'starttime': wndw_begin_dt,
+                'starttime': bin_begin_dt,
                 'mseed': {'dataquality': 'R'}
                 }
         stats_p = stats.copy()
@@ -569,11 +661,15 @@ def main():
         stats_t = stats.copy()
         stats_t['channel'] = 'HKC'
 
-        trace_p = obspy.Trace(data=results[:,1], header=stats_p)
-        trace_t = obspy.Trace(data=results[:,2], header=stats_t)
-        stream = obspy.Stream(traces=[trace_p,trace_t])
+        trace_p = obspy.Trace(data=pressure_out, header=stats_p)
+        trace_t = obspy.Trace(data=temperature_out, header=stats_t)
+        st = obspy.Stream(traces=[trace_p,trace_t])
 
-        stream.write(mseed_filename, format='MSEED')
+        dt_text = bin_begin_dt.strftime("%Y%m%d-%H%M")
+        mseed_filename = f'{dt_text}_{stn_name}.mseed'
+        mseed_filename = os.path.join(mseed_path, mseed_filename)
+        print(f'Writing results to MiniSEED file "{mseed_filename}".')
+        st.write(mseed_filename, format='MSEED')
 
         # Uncomment line below to see MiniSEED plot output.
         #stream.plot()
@@ -582,8 +678,8 @@ def main():
     if plot_flag != 'n':
         # Set min-max values for plot Y-axes
         print('Generating plot.')
-        p_min = np.min(results[:, 1])
-        p_max = np.max(results[:, 1])
+        p_min = np.min(pressure_out)
+        p_max = np.max(pressure_out)
         p_range = p_max - p_min
         if p_range == 0:
             intvl = 10
@@ -600,8 +696,8 @@ def main():
         p_min = p_min - p_min % intvl - intvl
         p_max = p_max - p_max % intvl + 2*intvl
 
-        t_min = np.min(results[:, 2])
-        t_max = np.max(results[:, 2])
+        t_min = np.min(temperature_out)
+        t_max = np.max(temperature_out)
         t_range = t_max-t_min
         if t_range == 0:
             intvl = 0.1
@@ -649,7 +745,7 @@ def main():
         ax1.set_ylabel('Pressure (Pa)', color=color)
         ax1.tick_params(axis='y', labelcolor=color)
         ax1.grid(axis='x')
-        ax1.plot(results[:, 0], results[:, 1], color=color, marker='.',
+        ax1.plot(time, pressure_out, color=color, marker='.',
                 markersize=1.0, linestyle='solid', linewidth=0.5)
         ax1.set_xlabel(xlabel)
 
@@ -657,11 +753,11 @@ def main():
         color = 'blue'
         ax2.set_ylabel('Temperature (°C)', color=color)
         ax2.tick_params(axis='y', labelcolor=color)
-        ax2.plot(results[:, 0], results[:, 2], color=color, marker='.',
+        ax2.plot(time, temperature_out, color=color, marker='.',
                 markersize=1.0, linestyle='solid', linewidth=0.5)
 
-        fig.suptitle(f'{apg_filename}\nBegin: {wndw_begin_dt}  -  '
-                    f'End: {wndw_end_dt}')
+        fig.suptitle(f'{apg_filename}\nBegin: {bin_begin_dt}  -  '
+                    f'End: {bin_end_dt}')
         fig.tight_layout()
         if time_format == 'd':
             # Rotates and aligns the X-axis labels.
@@ -797,7 +893,7 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, rawbin_flag):
     return records
 
 
-#####################################################################
+################################################################################
 def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
     '''
     Calculates the clock drift using one of two methods.
@@ -914,6 +1010,6 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
     return clk_drift_at_end
 
 
-##########################
+################################################################################
 if __name__ == '__main__':
     main()
