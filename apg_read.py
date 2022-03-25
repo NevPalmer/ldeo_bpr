@@ -25,7 +25,7 @@ def main():
     logger_ini = './APGlogger.ini'
     logger_versions = ['CSAC2013', 'Seascan2018']
     clk_start = '2000-01-01_00:00:00'  # 'YYYY-MM-DD_hh:mm:ss'
-    bin_delta_secs = 0
+    bin_delta_ms = 0
     out_filename = ''
     mseed_path = ''
     tmptr_smth_fctr = 1
@@ -149,23 +149,28 @@ def main():
     logger_version = args.version.strip()
     decmt_intvl = args.decimate
     tmptr_smth_fctr = args.tempsmth
-    clk_start = re.sub('[-: _/]', '_', args.clkstart)
+    clk_start = re.sub('[-: _/tT]', '_', args.clkstart)
     clk_start_dt = dt.datetime.strptime(clk_start, '%Y_%m_%d_%H_%M_%S')
+    clk_start_dt = dt_to_dt64(clk_start_dt)
+    print('='*80)
+    print('FILE STATS:')
+    print(f'Time of first sample = {clk_start_dt}')
     if args.bininterval:
         bin_int = args.bininterval.strip().upper()
         if bin_int[-1] == 'D':
-            bin_delta = dt.timedelta(days=int(bin_int[0:-1]))
+            bin_delta = np.timedelta64(int(bin_int[0:-1]), 'D')
         elif bin_int[-1] == 'H':
-            bin_delta = dt.timedelta(hours=int(bin_int[0:-1]))
+            bin_delta = np.timedelta64(int(bin_int[0:-1]), 'H')
         elif bin_int[-1] == 'M':
-            bin_delta = dt.timedelta(minutes=int(bin_int[0:-1]))
+            bin_delta = np.timedelta64(int(bin_int[0:-1]), 'M')
         else:
             sys.exit(f'"{bin_int}" is not a valid format for -bininterval.')
-        bin_delta_secs = bin_delta.total_seconds()
-
+        bin_delta_ms = delta64_to_ms(bin_delta)
+    
     if args.gpssynctime:
-        gpssynctime = re.sub('[-: _/]', '_', args.gpssynctime)
+        gpssynctime = re.sub('[-: _/tT]', '_', args.gpssynctime)
         gpssync_dt = dt.datetime.strptime(gpssynctime, '%Y_%j_%H_%M_%S')
+        gpssync_dt = dt_to_dt64(gpssync_dt)
     sync_tick_count = args.synctickcount
     stn_name = args.station.strip()
     if args.outfile:
@@ -238,57 +243,63 @@ def main():
     print(f'Filesize = {fsize} bytes')
     nrecs = int((fsize - logger['head_len'] ) / logger['rec_len'] )-1
     print(f'Number of records = {nrecs:d}')
-    file_duration_secs = nrecs*logger['record_epoch'] /1000
-    file_duration_days = file_duration_secs /3600/24
+    file_duration_ms = nrecs*logger['record_epoch']
+    file_duration_secs = file_duration_ms/1000
+    file_duration_days = file_duration_secs/3600/24
     print(f'File duration = {file_duration_days} days')
-    clk_end_dt = clk_start_dt + dt.timedelta(days=file_duration_days)
+    clk_end_dt = clk_start_dt + np.timedelta64(file_duration_ms, 'ms')
     print(f'Time of last sample = {clk_end_dt}')
+    print('='*80)
+    print('DATA WINDOW TO BE EXTRACTED STATS:')
 
     if args.beginwndw is None:
         wndw_begin_dt = clk_start_dt
     else:
-        wndw_begin = re.sub('[-: _/]', '_', args.beginwndw)
+        wndw_begin = re.sub('[-: _/tT]', '_', args.beginwndw)
         wndw_begin_dt = dt.datetime.strptime(wndw_begin, '%Y_%m_%d_%H_%M_%S.%f')
+        wndw_begin_dt = dt_to_dt64(wndw_begin_dt)
     if args.endwndw is None:
         wndw_end_dt = clk_end_dt
     else:
-        wndw_end = re.sub('[-: _/]', '_', args.endwndw)
+        wndw_end = re.sub('[-: _/tT]', '_', args.endwndw)
         wndw_end_dt = dt.datetime.strptime(wndw_end, '%Y_%m_%d_%H_%M_%S.%f')
-    wndw_begin_secs = ((wndw_begin_dt - clk_start_dt).total_seconds())
-    wndw_begin_days = wndw_begin_secs / (24*3600)
-    print(f'Data window beginning (date-time) = {wndw_begin_dt}')
-    print(f'Data window beginning (days since clock start): {wndw_begin_days}')
-    wndw_len_secs = ((wndw_end_dt - wndw_begin_dt).total_seconds())
-    wndw_len_days = wndw_len_secs / (24*3600)
-    print(f'Data window length (days): {wndw_len_days}')
-
+        wndw_end_dt = dt_to_dt64(wndw_end_dt)
+    print(f'Window beginning: {wndw_begin_dt}')
+    wndw_len = (wndw_end_dt - wndw_begin_dt)
+    wndw_len_ms = delta64_to_ms(wndw_len)
+    wndw_len_days = wndw_len_ms / (24*3600000)
+    print(f'Window length (days): {wndw_len_days}')
 
     # Clock drift
     if args.gpssynctime is not None:
-        drift = clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count)
-        print(f'Clock drift at end of recording in milliseconds:\n'
-              f'   (logged time - actual GPS time) = {drift}')
+        drift = clockdrift(
+            apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count)
+        print(f'Clock drift at end of recording (millisecs): {drift}\n'
+              f'   (logged time - actual GPS time)')
     else:
         drift = 0
         gpssync_dt = clk_end_dt
 
+    print('='*80)
+    print('STAS FOR EACH TIME BIN:')
+
     # Loop to extract data in time bins
     if out_filename:
         open(out_filename, 'w').close() # Create empty file, overwrite if exists.
-    wndw_beg_unix = wndw_begin_dt.replace(tzinfo=dt.timezone.utc).timestamp()
-    wndw_end_unix = wndw_end_dt.replace(tzinfo=dt.timezone.utc).timestamp()
-    bin_beg_unix = wndw_beg_unix
-    if bin_delta_secs == 0:
-        bin_end_unix = wndw_end_unix
+    wndw_beg_unix_ms = dt64_to_ms(wndw_begin_dt)
+    wndw_end_unix_ms = dt64_to_ms(wndw_end_dt)
+    bin_beg_ms = wndw_beg_unix_ms
+    if bin_delta_ms == 0:
+        bin_end_ms = wndw_end_unix_ms
     else:
-        bin_end_unix = bin_beg_unix - (bin_beg_unix % bin_delta_secs) + bin_delta_secs
-    while bin_beg_unix < wndw_end_unix:
-        if bin_end_unix > wndw_end_unix:
-            bin_end_unix = wndw_end_unix
-        bin_begin_dt = dt.datetime.utcfromtimestamp(bin_beg_unix)
-        bin_end_dt = dt.datetime.utcfromtimestamp(bin_end_unix)
+        bin_end_ms = bin_beg_ms - (bin_beg_ms % bin_delta_ms) + bin_delta_ms
+    while bin_beg_ms < wndw_end_unix_ms:
+        if bin_end_ms > wndw_end_unix_ms:
+            bin_end_ms = wndw_end_unix_ms
+        bin_begin_dt = ms_to_dt64(bin_beg_ms)
+        bin_end_dt = ms_to_dt64(bin_end_ms)
+        print('-'*80)
         print(
-            f'=============================================\n'
             f'Processing time bin: '
             f'start: {bin_begin_dt} | '
             f'end: {bin_end_dt}'
@@ -302,7 +313,7 @@ def main():
             clk_start_dt,
             bin_begin_dt,
             bin_end_dt,
-            file_duration_secs,
+            file_duration_ms,
             gpssync_dt,
             drift,
             press_conv_fctr,
@@ -316,8 +327,8 @@ def main():
             mseed_path,
         )
 
-        bin_beg_unix = bin_end_unix
-        bin_end_unix = bin_beg_unix + bin_delta_secs
+        bin_beg_ms = bin_end_ms
+        bin_end_ms = bin_beg_ms + bin_delta_ms
 
 
 ################################################################################
@@ -329,7 +340,7 @@ def generate_results(
         clk_start_dt,
         bin_begin_dt,
         bin_end_dt,
-        file_duration_secs,
+        file_duration_ms,
         gpssync_dt,
         drift,
         press_conv_fctr,
@@ -344,26 +355,25 @@ def generate_results(
         ):
     '''This is the primary function used to extract and output results.'''
     # Calculate window for extracting data.
-    bin_padding = 600 #Seconds
-    bin_begin_secs = ((bin_begin_dt - clk_start_dt).total_seconds())
-    print(f'Data bin beginning (date-time) = {bin_begin_dt}')
-    bin_len_secs = ((bin_end_dt - bin_begin_dt).total_seconds())
-    bin_end_secs = bin_begin_secs + bin_len_secs
+    bin_padding = 600000 # milliseconds
+
+    bin_begin_ms = delta64_to_ms(bin_begin_dt - clk_start_dt)
+    bin_len_ms = delta64_to_ms(bin_end_dt - bin_begin_dt)
+    bin_end_ms = bin_begin_ms + bin_len_ms
 
     # Make sure the requested times don't fall outside available records.
-    if (bin_begin_secs - bin_padding) < 0:
-        padded_bin_begin_secs = 0
+    if (bin_begin_ms - bin_padding) < 0:
+        padded_bin_begin_ms = 0
     else:
-        padded_bin_begin_secs = bin_begin_secs - bin_padding
+        padded_bin_begin_ms = bin_begin_ms - bin_padding
 
-    padded_bin_len_secs = bin_end_secs - padded_bin_begin_secs + bin_padding
-    # Factors of 1000 included below to fix floating point rounding error.
-    avail_bin_len_secs = (file_duration_secs*1000 - bin_begin_secs*1000)/1000
-    if (avail_bin_len_secs - padded_bin_len_secs) <= 0:
-        padded_bin_len_secs = padded_bin_len_secs - bin_padding
+    padded_bin_len_ms = bin_end_ms - padded_bin_begin_ms + bin_padding
+    avail_bin_len_ms = file_duration_ms - bin_begin_ms
+    if (avail_bin_len_ms - padded_bin_len_ms) <= 0:
+        padded_bin_len_ms = padded_bin_len_ms - bin_padding
 
-    rec_begin = int(padded_bin_begin_secs*1000 / logger['record_epoch'])
-    nrecs_want = int(padded_bin_len_secs*1000 / logger['record_epoch']) + 1
+    rec_begin = int(padded_bin_begin_ms / logger['record_epoch'])
+    nrecs_want = int(padded_bin_len_ms / logger['record_epoch']) + 1
 
     # Extract records from APG file for the time window specified.
     print('Extracting raw records:\n', end='')
@@ -431,11 +441,11 @@ def generate_results(
     nom_ticks_t = np.linspace(nominal_begin_tick,
                                 nominal_end_tick,
                                 num=nrecs_want,
-                                endpoint=True)
+                                endpoint=True).astype('int64')
     nom_ticks_p = np.linspace(nominal_begin_tick,
                                 nominal_end_tick + logger['record_epoch'] ,
                                 num=nrecs_want*logger['smpls_per_rec'],
-                                endpoint=False)
+                                endpoint=False).astype('int64')
 
     # If the nominal tick count and actual recorded tick count are not precisely
     # aligned then use linear interpolation to generate a precisely periodic
@@ -478,11 +488,11 @@ def generate_results(
         millisecs_t  = np.linspace(final_begin_tick,
                                 final_end_tick,
                                 num=epoch_count,
-                                endpoint=True)
+                                endpoint=True).astype('int64')
         millisecs_p  = np.linspace(final_begin_tick,
                                 final_end_tick + logger['record_epoch'],
                                 num=epoch_count*logger['smpls_per_rec'],
-                                endpoint=False)
+                                endpoint=False).astype('int64')
         ticks_ext = np.append(ticks,ticks[-1]+logger['record_epoch'])
         nom_ticks_t = np.append(nom_ticks_t,nom_ticks_t[-1]+logger['record_epoch'])
 
@@ -495,14 +505,17 @@ def generate_results(
     # Apply clock drift to time values
     # Clock drift is fixed at the mid-point of the period of extracted data
     # and any change is assumed to be insignificant over that period.
-    millisecs_logged = ((gpssync_dt - clk_start_dt).total_seconds()) * 1000
+    millisecs_logged = delta64_to_ms(gpssync_dt - clk_start_dt)
     drift_beg = drift * (millisecs_t[0] / millisecs_logged)
     drift_end = drift * (millisecs_t[-1] / millisecs_logged)
     #print(f'Clock drift at beginning of extracted block: {drift_beg} ms.')
     #print(f'Clock drift at end of extracted block:       {drift_end} ms.')
     drift_applied = (drift_beg + drift_end) / 2
     # Round the drift to be applied to the  nearest whole sample epoch.
-    drift_applied = logger['sample_epoch'] * round(drift_applied / logger['sample_epoch'],0)
+    drift_applied = int(
+        logger['sample_epoch'] * round(drift_applied 
+        / logger['sample_epoch'],0)
+    )
     print(f'Clock drift applied to the extracted block:  {drift_applied} ms.')
     # Apply closk drift to time records.
     millisecs_p = millisecs_p - drift_applied
@@ -614,46 +627,48 @@ def generate_results(
         print()
 
     if len(pressure_dcmtd) != 0:
-        time = millisecs_dcmtd / 1000
+        time = millisecs_dcmtd
         pressure_out = pressure_dcmtd
         temperature_out = temperature_dcmtd
     else:
-        time = millisecs_p / 1000
+        time = millisecs_p
         pressure_out = pressure
         temperature_out = temperature_upsmpld
 
     # Trim results to the originally specified time window.
-    bin_end_secs = bin_begin_secs + bin_len_secs
-    mask = np.logical_and(time >= bin_begin_secs, time < bin_end_secs)
+    bin_end_ms = bin_begin_ms + bin_len_ms
+    mask = np.logical_and(time >= bin_begin_ms, time < bin_end_ms)
     time = time[mask]
     pressure_out = pressure_out[mask]
     temperature_out = temperature_out[mask]
 
     # Convert timestamp from seconds to datetime if specified.
-    xlabel = 'Seconds'
     if time_format == 'd':
-        print('Calculating a timestamp array from the seconds array.')
-        time = [clk_start_dt + dt.timedelta(seconds=sec)
-                for sec in time]
+        print('Calculating a timestamp array from the milliseconds array.')
+        time = (clk_start_dt + ms_to_delta64(time)).astype('datetime64[ms]')
         xlabel = 'Date-Time'
+    else:
+        time = time / 1000
+        xlabel = 'Seconds'
 
     # Save results to CSV file
     if out_filename:
         print(f'Appending results to file "{out_filename}".')
-        with open(out_filename,'ab') as outfile:
-            np.savetxt(
-                outfile,
-                np.column_stack((time, pressure_out, temperature_out)),
-                fmt='%s,%f,%f')
+        time = time.astype('datetime64[ms]')
+        content = zip(time, pressure_out, temperature_out)
+        with open(out_filename,'a', newline='') as csvfile:
+            for row in content:
+                csvfile.write(f'{row[0]},{row[1]:14.3f},{row[2]:10.6f}\n')
 
     # Save results to MiniSEED file
     if mseed_path:
+        bin_begin = dt64_to_dt(bin_begin_dt)
         stats = {
                 'network': '',
                 'station': stn_name,
                 'location': '',
                 'sampling_rate': 1000/logger['sample_epoch'],
-                'starttime': bin_begin_dt,
+                'starttime': bin_begin,
                 'mseed': {'dataquality': 'R'}
                 }
         stats_p = stats.copy()
@@ -665,7 +680,7 @@ def generate_results(
         trace_t = obspy.Trace(data=temperature_out, header=stats_t)
         st = obspy.Stream(traces=[trace_p,trace_t])
 
-        dt_text = bin_begin_dt.strftime("%Y%m%d-%H%M")
+        dt_text = bin_begin.strftime("%Y%m%d-%H%M")
         mseed_filename = f'{dt_text}_{stn_name}.mseed'
         mseed_filename = os.path.join(mseed_path, mseed_filename)
         print(f'Writing results to MiniSEED file "{mseed_filename}".')
@@ -724,19 +739,19 @@ def generate_results(
         smthd = tmptr_smth_fctr >= 5
         dcmtd = decmt_intvl != 0
         if dcmtd and plot_flag == 'r':
-            time_p = millisecs_p / 1000
             if time_format == 'd':
-                time_p = [clk_start_dt + dt.timedelta
-                        (seconds=sec) for sec in time_p]
+                time_p = clk_start_dt + ms_to_delta64(millisecs_p)
+            else:
+                time_p = millisecs_p / 1000
             ax1.plot(time_p, pressure, color='pink', marker='.',
                     markersize=1.0, linestyle='')
 
         # Plot raw temperature values if requested
         if (dcmtd or smthd) and plot_flag == 'r':
-            time_t = millisecs_t / 1000
             if time_format == 'd':
-                time_t = [clk_start_dt + dt.timedelta
-                        (seconds=sec) for sec in time_t]
+                time_t = clk_start_dt + ms_to_delta64(millisecs_t)
+            else:
+                time_t = millisecs_t / 1000
             ax2.plot(time_t, temperature_raw, color='lightblue', marker='.',
                     markersize=1.0, linestyle='')
 
@@ -781,7 +796,7 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, rawbin_flag):
 
             # Print record as a string of Hex and/or Bin values to stdout.
             if rawbin_flag:
-                hex_str = ''
+                #hex_str = ''
                 bin_str = ''
                 for ch in record_bin:
                     #hex_str += hex(ch)+' '
@@ -844,7 +859,6 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, rawbin_flag):
 
         # Remove tick count rollovers and make actual ticks continuously increasing.
         nominal_begin_tick = rec_begin * logger['record_epoch']
-        nominal_end_tick = (rec_begin + nrecs_want -1) * logger['record_epoch']
         # print(f'Tick field length (in bits): {tic_field_len}')
         rollover_period = 2 ** logger['tic_bit_len']  # in millisec
         # print(f'Rollover length (in millisec/ticks): {rollover_period}')
@@ -908,7 +922,7 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
     is used in place of sync_tick_count.
     '''
 
-    millisecs_logged = ((gpssync_dt - clk_start_dt).total_seconds()) * 1000
+    millisecs_logged = delta64_to_ms(gpssync_dt - clk_start_dt)
 
     if sync_tick_count is None:
         # Assign names to column numbers of raw data array.
@@ -917,15 +931,14 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
         tick_col = last_field - logger['fmt_field']['tic']
         pcore_col = last_field - logger['fmt_field']['pcore']
         pn_col = last_field - logger['fmt_field']['pn']
-        tptr_col = last_field - logger['fmt_field']['tptr']
 
         # Window for identifying sync_tick_count is +/-5 minutes long.
-        sync_wndw_secs = 5 * 60
+        sync_wndw_ms = 5 * 60000
         # GPS sync time (gpssync_dt) is mid point of  window for sync.
-        wndw_begin_secs = ((gpssync_dt - clk_start_dt).total_seconds())
-        wndw_begin_secs = wndw_begin_secs - (sync_wndw_secs)
-        rec_begin = int(wndw_begin_secs*1000 / logger['record_epoch'] )
-        nrecs_want = int(sync_wndw_secs*2000 / logger['record_epoch'] )+1
+        wndw_begin_ms = delta64_to_ms(gpssync_dt - clk_start_dt)
+        wndw_begin_ms = wndw_begin_ms - sync_wndw_ms
+        rec_begin = int(wndw_begin_ms / logger['record_epoch'] )
+        nrecs_want = int(sync_wndw_ms*2 / logger['record_epoch'] )+1
 
         sync_records = extractrecords(apg_filename, logger, nrecs_want, rec_begin,
                              False)
@@ -982,8 +995,9 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
             sync_block = sync_records[sync_row,:]
         except UnboundLocalError:
             sys.exit(f'Unable to determine clock drift.\n'
-                f'The period {gpssync_dt} +/-{sync_wndw_secs} seconds does not include a \n'
-                f'frequency injection for syncing to.')
+                f'The raw data in during the period {gpssync_dt} '
+                f'+/-{sync_wndw_ms/1000} seconds does not contain '
+                f'a frequency injection for syncing to.')
 
         if pn_col > pcore_col:
             pn = sync_block[pcore_col+1:pn_col+1]
@@ -1005,10 +1019,40 @@ def clockdrift(apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count):
         millisecs_logged = millisecs_logged % tick_rollover
 
     # APG logger clock offset relative to GPS time (positive = APG > GPS)
-    clk_drift_at_end = int(sync_tick_count - (millisecs_logged))
+    clk_drift_at_end = int(sync_tick_count - millisecs_logged)
 
     return clk_drift_at_end
 
+################################################################################
+# The following are conversions to and from numpy datetime64 & timedelta64
+
+def dt64_to_dt(dt64):
+    '''Convert a numpy datetime64 to a datetime datetime.'''
+    seconds_since_epoch = dt64_to_ms(dt64) / 1000
+    return dt.datetime.utcfromtimestamp(seconds_since_epoch)
+
+def dt_to_dt64(dt):
+    '''Convert a datetime datetime to a numpy datetime64.'''
+    return np.datetime64(dt)
+
+def delta64_to_ms(delta64):
+    '''Convert a numpy timedelta64 to milliseconds.'''
+    return int(delta64.astype('timedelta64[ms]').astype('int64'))
+
+def ms_to_delta64(msec):
+    '''Convert numpy array of milliseconds to timedelta64.'''
+    return msec.astype('timedelta64[ms]')
+
+def dt64_to_ms(dt64):
+    '''
+    Convert a numpy datetime64 to milliseconds.
+    Returns an int64.
+    '''
+    return int(dt64.astype('datetime64[ms]').astype('int64'))
+
+def ms_to_dt64(msec):
+    '''Convert milliseconds to a numpy datetime64.'''
+    return np.datetime64(msec, 'ms')
 
 ################################################################################
 if __name__ == '__main__':
