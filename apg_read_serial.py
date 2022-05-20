@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/home/nevillep/miniforge3/envs/geod/bin/python
 
 # Version 20200818
 # by Neville Palmer, GNS Science
