@@ -172,7 +172,7 @@ def main():
     parser.add_argument(
         "-n",
         "--station",
-        help="Station name to be used in MiniSEED file " "header. Max 5 characters.",
+        help="Station name to be used in MiniSEED file header. Max 5 characters.",
         default="",
     )
     parser.add_argument(
@@ -769,9 +769,9 @@ def generate_results(
             "mseed": {"dataquality": "R"},
         }
         stats_p = stats.copy()
-        stats_p["channel"] = "HDP"
+        stats_p["channel"] = "HDH"
         stats_t = stats.copy()
-        stats_t["channel"] = "HKC"
+        stats_t["channel"] = "HKO"
 
         trace_p = obspy.Trace(data=pressure_mseed, header=stats_p)
         trace_t = obspy.Trace(data=temperature_mseed, header=stats_t)
