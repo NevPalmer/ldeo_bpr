@@ -204,8 +204,10 @@ def main():
         help="Generate and display a timeline plot. Either "
         "display only the (f)inal smoothed/decimated result "
         "or additionally dispaly the (r)aw data in the "
-        "background or (n)ot generate any plot at all.",
-        choices=["n", "f", "r"],
+        "background or (n)ot generate any plot at all. "
+        "Also specify whether to (s)ave as a file, (d)isplay to "
+        "the screen or output as (b)oth.",
+        choices=["n", "fs", "fd", "fb", "rs", "rd", "rb"],
         default="n",
     )
     args = parser.parse_args()
@@ -252,7 +254,8 @@ def main():
             )
         mseed_path = os.path.normpath(args.mseedpath)
     time_format = args.fmttime.strip()
-    plot_flag = args.plot.strip()
+    plot_flag = args.plot.strip()[:1]
+    plotout_flag = args.plot.strip()[1:]
 
     # Read Paros transducer coefficients into a dict of lists from ini file.
     paros_coefs = ("U", "Y", "C", "D", "T")
@@ -411,6 +414,7 @@ def main():
             tmptr_smth_fctr,
             time_format,
             plot_flag,
+            plotout_flag,
             out_filename,
             mseed_path,
             trbl_sht,
@@ -438,6 +442,7 @@ def generate_results(
     tmptr_smth_fctr,
     time_format,
     plot_flag,
+    plotout_flag,
     out_filename,
     mseed_path,
     trbl_sht,
@@ -894,7 +899,12 @@ def generate_results(
         if time_format == "d":
             # Rotates and aligns the X-axis labels.
             plt.gcf().autofmt_xdate(bottom=0.2, rotation=30, ha="right")
-        plt.show()
+        if plotout_flag in ["s", "b"]:
+            basename = os.path.splitext(os.path.basename(apg_filename))[0]
+            fig.savefig(f"./{basename}.png", dpi=200)
+        if plotout_flag in ["d", "b"]:
+            plt.show()
+        plt.close(fig)
 
     return
 
