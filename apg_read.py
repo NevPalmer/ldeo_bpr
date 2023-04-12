@@ -210,6 +210,14 @@ def main():
         choices=["n", "fs", "fd", "fb", "rs", "rd", "rb"],
         default="n",
     )
+    parser.add_argument(
+        "--medfilt",
+        help="Apply a median filter to despike pressure data "
+        "using the window size specified. "
+        "The window size must be a positive odd integer.",
+        type=int,
+        default=0,
+    )
     args = parser.parse_args()
 
     # Translate argparse parameters (except for window times).
@@ -220,6 +228,7 @@ def main():
     logger_version = args.version.strip()
     decmt_intvl = args.decimate
     tmptr_smth_fctr = args.tempsmth
+    medfilt_wndw = args.medfilt
     clk_start = re.sub("[-: _/tT]", "_", args.clkstart)
     clk_start_dt = dt.datetime.strptime(clk_start, "%Y_%m_%d_%H_%M_%S")
     clk_start_dt = pydt_to_dt64(clk_start_dt)
@@ -412,6 +421,7 @@ def main():
             apg_filename,
             decmt_intvl,
             tmptr_smth_fctr,
+            medfilt_wndw,
             time_format,
             plot_flag,
             plotout_flag,
@@ -440,6 +450,7 @@ def generate_results(
     apg_filename,
     decmt_intvl,
     tmptr_smth_fctr,
+    medfilt_wndw,
     time_format,
     plot_flag,
     plotout_flag,
@@ -556,7 +567,8 @@ def generate_results(
             dirn = "ahead"
         print(
             f"Nominal time at start of window is {abs(beg_diff)/1000} "
-            f"seconds {dirn} Actual recorded time ticks."
+            f"seconds {dirn} Actual recorded time ticks.",
+            flush=True,
         )
         end_diff = nominal_end_tick - actual_end_tick
         if end_diff < 0:
@@ -565,7 +577,8 @@ def generate_results(
             dirn = "ahead"
         print(
             f"Nominal time at end of window is {abs(end_diff)/1000} "
-            f"seconds {dirn} Actual recorded time ticks."
+            f"seconds {dirn} Actual recorded time ticks.",
+            flush=True,
         )
 
         # Determine first tick count to achieve fixed period epochs.
@@ -608,7 +621,10 @@ def generate_results(
     drift_applied = int(
         logger["sample_epoch"] * round(drift_applied / logger["sample_epoch"], 0)
     )
-    print(f"Clock drift applied to the extracted block:  {drift_applied} ms.")
+    print(
+        f"Clock drift applied to the extracted block:  {drift_applied} ms.",
+        flush=True,
+    )
     # Apply closk drift to time records.
     millisecs_p = millisecs_p - drift_applied
     millisecs_t = millisecs_t - drift_applied
@@ -628,14 +644,14 @@ def generate_results(
     # Apply smoothing filter to temperature before calculating pressure.
     # This eliminates significant noise from the pressure values.
     if tmptr_smth_fctr >= 5:
-        print("Applying temperature smoothing filter.")
+        print("Applying temperature smoothing filter.", flush=True)
         TP_raw = TP
         TP = sig.savgol_filter(TP, tmptr_smth_fctr, 3, axis=0, mode="mirror")
         Uv_raw = TP_raw - paros["U"][0]
         temperature_raw = np.polyval(paros["Y"], Uv_raw)
 
     # Calculate temperature array
-    print("Calculating temperatures and pressures.")
+    print("Calculating temperatures and pressures.", flush=True)
     Uv = TP - paros["U"][0]
     # Upsample temperatures to match frequency of pressure samples by
     #  linear interpolation.
@@ -650,6 +666,14 @@ def generate_results(
     facts = 1 - (T0**2) / (PP**2)
     pressure = Cv * facts * (1 - Dv * facts)  # pressure in PSIA
     pressure = pressure * press_conv_fctr  # Convert pressure units
+
+    # Apply a median filter to remove spikes from pressure data.
+    if medfilt_wndw:
+        print(
+            f"Applying Median Filter with a window of {medfilt_wndw} " f"samples.",
+            flush=True,
+        )
+        pressure = sig.medfilt(pressure, medfilt_wndw)
 
     # Decimate results
     # To produce sensible decimation results when ftype='iir',
@@ -741,7 +765,7 @@ def generate_results(
 
     # Convert timestamp from seconds to datetime if specified.
     if time_format == "d":
-        print("Calculating a timestamp array from the milliseconds array.")
+        print("Calculating a timestamp array from the milliseconds array.", flush=True)
         time = (clk_start_dt + ms_to_delta64(time)).astype("datetime64[ms]")
         xlabel = "Date-Time"
     else:
@@ -794,7 +818,7 @@ def generate_results(
     # Generate and output a plot
     if plot_flag != "n":
         # Set min-max values for plot Y-axes
-        print("Generating plot.")
+        print("Generating plot.", flush=True)
         p_min = np.min(pressure_out)
         p_max = np.max(pressure_out)
         p_range = p_max - p_min
@@ -1055,6 +1079,18 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, trbl_sht, clk_st
                     # diff of 2 epochs, then the current single time tick is
                     # corrupt and not an actual rollover.
                     ticks[rollover] = ticks[rollover - 1] + logger["record_epoch"]
+                elif (
+                    abs(
+                        (ticks[rollover] - ticks[rollover - 2])
+                        - 2 * logger["record_epoch"]
+                    )
+                    < 2
+                ):
+                    # If the currently indicated rollover record and two records
+                    # previous are within 2ms of the expected time diff of
+                    # 2 epochs, then the previous single time tick is
+                    # corrupt and not an actual rollover.
+                    ticks[rollover - 1] = ticks[rollover - 2] + logger["record_epoch"]
                 else:
                     cumtv_rollovers = cumtv_rollovers + 1
                     ticks[rollover:nrecs_want] = (
