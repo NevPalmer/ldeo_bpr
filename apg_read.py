@@ -172,7 +172,7 @@ def main():
     parser.add_argument(
         "-n",
         "--station",
-        help="Station name to be used in MiniSEED file " "header. Max 5 characters.",
+        help="Station name to be used in MiniSEED file header. Max 5 characters.",
         default="",
     )
     parser.add_argument(
@@ -204,9 +204,19 @@ def main():
         help="Generate and display a timeline plot. Either "
         "display only the (f)inal smoothed/decimated result "
         "or additionally dispaly the (r)aw data in the "
-        "background or (n)ot generate any plot at all.",
-        choices=["n", "f", "r"],
+        "background or (n)ot generate any plot at all. "
+        "Also specify whether to (s)ave as a file, (d)isplay to "
+        "the screen or output as (b)oth.",
+        choices=["n", "fs", "fd", "fb", "rs", "rd", "rb"],
         default="n",
+    )
+    parser.add_argument(
+        "--medfilt",
+        help="Apply a median filter to despike pressure data "
+        "using the window size specified. "
+        "The window size must be a positive odd integer.",
+        type=int,
+        default=0,
     )
     args = parser.parse_args()
 
@@ -218,6 +228,7 @@ def main():
     logger_version = args.version.strip()
     decmt_intvl = args.decimate
     tmptr_smth_fctr = args.tempsmth
+    medfilt_wndw = args.medfilt
     clk_start = re.sub("[-: _/tT]", "_", args.clkstart)
     clk_start_dt = dt.datetime.strptime(clk_start, "%Y_%m_%d_%H_%M_%S")
     clk_start_dt = pydt_to_dt64(clk_start_dt)
@@ -252,7 +263,8 @@ def main():
             )
         mseed_path = os.path.normpath(args.mseedpath)
     time_format = args.fmttime.strip()
-    plot_flag = args.plot.strip()
+    plot_flag = args.plot.strip()[:1]
+    plotout_flag = args.plot.strip()[1:]
 
     # Read Paros transducer coefficients into a dict of lists from ini file.
     paros_coefs = ("U", "Y", "C", "D", "T")
@@ -409,8 +421,10 @@ def main():
             apg_filename,
             decmt_intvl,
             tmptr_smth_fctr,
+            medfilt_wndw,
             time_format,
             plot_flag,
+            plotout_flag,
             out_filename,
             mseed_path,
             trbl_sht,
@@ -436,8 +450,10 @@ def generate_results(
     apg_filename,
     decmt_intvl,
     tmptr_smth_fctr,
+    medfilt_wndw,
     time_format,
     plot_flag,
+    plotout_flag,
     out_filename,
     mseed_path,
     trbl_sht,
@@ -551,7 +567,8 @@ def generate_results(
             dirn = "ahead"
         print(
             f"Nominal time at start of window is {abs(beg_diff)/1000} "
-            f"seconds {dirn} Actual recorded time ticks."
+            f"seconds {dirn} Actual recorded time ticks.",
+            flush=True,
         )
         end_diff = nominal_end_tick - actual_end_tick
         if end_diff < 0:
@@ -560,7 +577,8 @@ def generate_results(
             dirn = "ahead"
         print(
             f"Nominal time at end of window is {abs(end_diff)/1000} "
-            f"seconds {dirn} Actual recorded time ticks."
+            f"seconds {dirn} Actual recorded time ticks.",
+            flush=True,
         )
 
         # Determine first tick count to achieve fixed period epochs.
@@ -603,7 +621,10 @@ def generate_results(
     drift_applied = int(
         logger["sample_epoch"] * round(drift_applied / logger["sample_epoch"], 0)
     )
-    print(f"Clock drift applied to the extracted block:  {drift_applied} ms.")
+    print(
+        f"Clock drift applied to the extracted block:  {drift_applied} ms.",
+        flush=True,
+    )
     # Apply closk drift to time records.
     millisecs_p = millisecs_p - drift_applied
     millisecs_t = millisecs_t - drift_applied
@@ -623,14 +644,14 @@ def generate_results(
     # Apply smoothing filter to temperature before calculating pressure.
     # This eliminates significant noise from the pressure values.
     if tmptr_smth_fctr >= 5:
-        print("Applying temperature smoothing filter.")
+        print("Applying temperature smoothing filter.", flush=True)
         TP_raw = TP
         TP = sig.savgol_filter(TP, tmptr_smth_fctr, 3, axis=0, mode="mirror")
         Uv_raw = TP_raw - paros["U"][0]
         temperature_raw = np.polyval(paros["Y"], Uv_raw)
 
     # Calculate temperature array
-    print("Calculating temperatures and pressures.")
+    print("Calculating temperatures and pressures.", flush=True)
     Uv = TP - paros["U"][0]
     # Upsample temperatures to match frequency of pressure samples by
     #  linear interpolation.
@@ -645,6 +666,14 @@ def generate_results(
     facts = 1 - (T0**2) / (PP**2)
     pressure = Cv * facts * (1 - Dv * facts)  # pressure in PSIA
     pressure = pressure * press_conv_fctr  # Convert pressure units
+
+    # Apply a median filter to remove spikes from pressure data.
+    if medfilt_wndw:
+        print(
+            f"Applying Median Filter with a window of {medfilt_wndw} " f"samples.",
+            flush=True,
+        )
+        pressure = sig.medfilt(pressure, medfilt_wndw)
 
     # Decimate results
     # To produce sensible decimation results when ftype='iir',
@@ -736,7 +765,7 @@ def generate_results(
 
     # Convert timestamp from seconds to datetime if specified.
     if time_format == "d":
-        print("Calculating a timestamp array from the milliseconds array.")
+        print("Calculating a timestamp array from the milliseconds array.", flush=True)
         time = (clk_start_dt + ms_to_delta64(time)).astype("datetime64[ms]")
         xlabel = "Date-Time"
     else:
@@ -746,7 +775,8 @@ def generate_results(
     # Save results to CSV file
     if out_filename:
         print(f'Appending results to file "{out_filename}".')
-        time = time.astype("datetime64[ms]")
+        if time_format == "d":
+            time = time.astype("datetime64[ms]")
         content = zip(time, pressure_out, temperature_out)
         with open(out_filename, "a", newline="", encoding="utf8") as csvfile:
             for row in content:
@@ -769,9 +799,9 @@ def generate_results(
             "mseed": {"dataquality": "R"},
         }
         stats_p = stats.copy()
-        stats_p["channel"] = "HDP"
+        stats_p["channel"] = "HDH"
         stats_t = stats.copy()
-        stats_t["channel"] = "HKC"
+        stats_t["channel"] = "HKO"
 
         trace_p = obspy.Trace(data=pressure_mseed, header=stats_p)
         trace_t = obspy.Trace(data=temperature_mseed, header=stats_t)
@@ -789,7 +819,7 @@ def generate_results(
     # Generate and output a plot
     if plot_flag != "n":
         # Set min-max values for plot Y-axes
-        print("Generating plot.")
+        print("Generating plot.", flush=True)
         p_min = np.min(pressure_out)
         p_max = np.max(pressure_out)
         p_range = p_max - p_min
@@ -894,7 +924,12 @@ def generate_results(
         if time_format == "d":
             # Rotates and aligns the X-axis labels.
             plt.gcf().autofmt_xdate(bottom=0.2, rotation=30, ha="right")
-        plt.show()
+        if plotout_flag in ["s", "b"]:
+            basename = os.path.splitext(os.path.basename(apg_filename))[0]
+            fig.savefig(f"./{basename}.png", dpi=200)
+        if plotout_flag in ["d", "b"]:
+            plt.show()
+        plt.close(fig)
 
     return
 
