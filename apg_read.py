@@ -807,7 +807,8 @@ def generate_results(
     # Save results to CSV file
     if out_filename:
         print(f'Appending results to file "{out_filename}".')
-        time = time.astype("datetime64[ms]")
+        if time_format == "d":
+            time = time.astype("datetime64[ms]")
         content = zip(time, pressure_out, temperature_out)
         with open(out_filename, "a", newline="", encoding="utf8") as csvfile:
             for row in content:
