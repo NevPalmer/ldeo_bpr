@@ -13,6 +13,7 @@ import datetime as dt
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.signal as sig
+import scipy.stats as stat
 import obspy
 from numexpr import evaluate
 
@@ -218,6 +219,14 @@ def main():
         type=int,
         default=0,
     )
+    parser.add_argument(
+        "--meddiff",
+        help="Apply a binned median to pressure data and remove"
+        "any data points that are greater than the difference specified from the"
+        "median values. The difference must be a positive integer.",
+        type=int,
+        default=0,
+    )
     args = parser.parse_args()
 
     # Translate argparse parameters (except for window times).
@@ -229,11 +238,12 @@ def main():
     decmt_intvl = args.decimate
     tmptr_smth_fctr = args.tempsmth
     medfilt_wndw = args.medfilt
+    med_diff = args.meddiff
     clk_start = re.sub("[-: _/tT]", "_", args.clkstart)
     clk_start_dt = dt.datetime.strptime(clk_start, "%Y_%m_%d_%H_%M_%S")
     clk_start_dt = pydt_to_dt64(clk_start_dt)
     print("=" * 80)
-    print("STATS OF RAW FILE:")
+    print(f"STATS OF RAW FILE: {apg_filename}")
     print(f"Time of first sample = {clk_start_dt}")
     if args.bininterval:
         bin_int = args.bininterval.strip().upper()
@@ -422,6 +432,7 @@ def main():
             decmt_intvl,
             tmptr_smth_fctr,
             medfilt_wndw,
+            med_diff,
             time_format,
             plot_flag,
             plotout_flag,
@@ -451,6 +462,7 @@ def generate_results(
     decmt_intvl,
     tmptr_smth_fctr,
     medfilt_wndw,
+    med_diff,
     time_format,
     plot_flag,
     plotout_flag,
@@ -641,14 +653,41 @@ def generate_results(
     # Pressure period (usec)
     PP = (press_raw / (logger["PP_fctr"]) + logger["PP_cnst"]) / (logger["clock_freq"])
 
+    TP_raw = TP
+    Uv_raw = TP_raw - paros["U"][0]
+    temperature_raw = np.polyval(paros["Y"], Uv_raw)
+
+    if med_diff:
+        # Temperature spike/noise removal
+        mask = np.where((temperature_raw < 0) | (temperature_raw > 30))
+        temperature_del = np.delete(temperature_raw, mask)
+        TP_del = np.delete(TP, mask)
+        millisecs_t_del = np.delete(millisecs_t, mask)
+
+        # More refined removal based on binned median values
+        # Generate more refined spike removal by binning data and taking median
+        # of each bin, then interpolate back to size of full pressure dataset.
+        # Take difference of rough filter and raw pressure values. Where difference
+        # is greater than specified amount delete value and corresponding time stamp.
+        # Replace deleted data points with interpolated values.
+        bin_size = 1_000_000  # milliseconds
+        bins = int((millisecs_t.max() - millisecs_t.min()) / bin_size)
+        binned_tptr, bin_edges, _ = stat.binned_statistic(
+            millisecs_t_del, temperature_del, "median", bins
+        )
+        bin_centers = (bin_edges[1:] + bin_edges[:-1]) / 2
+        tptr_medsmth = np.interp(millisecs_t_del, bin_centers, binned_tptr)
+        difference = np.abs(temperature_del - tptr_medsmth)
+        mask = np.where(difference > 0.01)
+        TP_del = np.delete(TP_del, mask)
+        millisecs_t_del = np.delete(millisecs_t_del, mask)
+        TP = np.interp(millisecs_t, millisecs_t_del, TP_del)
+
     # Apply smoothing filter to temperature before calculating pressure.
     # This eliminates significant noise from the pressure values.
     if tmptr_smth_fctr >= 5:
         print("Applying temperature smoothing filter.", flush=True)
-        TP_raw = TP
         TP = sig.savgol_filter(TP, tmptr_smth_fctr, 3, axis=0, mode="mirror")
-        Uv_raw = TP_raw - paros["U"][0]
-        temperature_raw = np.polyval(paros["Y"], Uv_raw)
 
     # Calculate temperature array
     print("Calculating temperatures and pressures.", flush=True)
@@ -666,8 +705,38 @@ def generate_results(
     facts = 1 - (T0**2) / (PP**2)
     pressure = Cv * facts * (1 - Dv * facts)  # pressure in PSIA
     pressure = pressure * press_conv_fctr  # Convert pressure units
+    pressure_raw = pressure
 
-    # Apply a median filter to remove spikes from pressure data.
+    if med_diff:
+        # Pressure spike/noise removal
+
+        # Very course first pass removal based on overall median
+        # difference = np.abs(pressure - np.median(pressure))
+        # mask = np.where(difference > 20_000)
+        mask = np.where((pressure > 50_000_000) | (pressure < 0))
+        pressure_del = np.delete(pressure, mask)
+        millisecs_del = np.delete(millisecs_p, mask)
+
+        # More refined removal based on binned median values
+        # Generate more refined spike removal by binning data and taking median
+        # of each bin, then interpolate back to size of full pressure dataset.
+        # Take difference of rough filter and raw pressure values. Where difference
+        # is greater than specified amount delete value and corresponding time stamp.
+        # Replace deleted data points with interpolated values.
+        bin_size = 1_000_000  # milliseconds
+        bins = int((millisecs_p.max() - millisecs_p.min()) / bin_size)
+        binned_press, bin_edges, _ = stat.binned_statistic(
+            millisecs_del, pressure_del, "median", bins
+        )
+        bin_centers = (bin_edges[1:] + bin_edges[:-1]) / 2
+        pressure_medsmth = np.interp(millisecs_del, bin_centers, binned_press)
+        difference = np.abs(pressure_del - pressure_medsmth)
+        mask = np.where(difference > med_diff)
+        pressure_del = np.delete(pressure_del, mask)
+        millisecs_del = np.delete(millisecs_del, mask)
+        pressure = np.interp(millisecs_p, millisecs_del, pressure_del)
+
+    # Apply a median filter to further remove spikes from pressure data.
     if medfilt_wndw:
         print(
             f"Applying Median Filter with a window of {medfilt_wndw} " f"samples.",
@@ -871,7 +940,12 @@ def generate_results(
             else:
                 time_p = millisecs_p / 1000
             ax1.plot(
-                time_p, pressure, color="pink", marker=".", markersize=1.0, linestyle=""
+                time_p,
+                pressure_raw,
+                color="pink",
+                marker=".",
+                markersize=1.0,
+                linestyle="",
             )
 
         # Plot raw temperature values if requested
@@ -1080,6 +1154,18 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, trbl_sht, clk_st
                     # diff of 2 epochs, then the current single time tick is
                     # corrupt and not an actual rollover.
                     ticks[rollover] = ticks[rollover - 1] + logger["record_epoch"]
+                elif (
+                    abs(
+                        (ticks[rollover] - ticks[rollover - 2])
+                        - 2 * logger["record_epoch"]
+                    )
+                    < 2
+                ):
+                    # If the currently indicated rollover record and two records
+                    # previous are within 2ms of the expected time diff of
+                    # 2 epochs, then the previous single time tick is
+                    # corrupt and not an actual rollover.
+                    ticks[rollover - 1] = ticks[rollover - 2] + logger["record_epoch"]
                 else:
                     cumtv_rollovers = cumtv_rollovers + 1
                     ticks[rollover:nrecs_want] = (
