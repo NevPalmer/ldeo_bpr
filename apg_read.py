@@ -1,6 +1,6 @@
 #!/home/nevillep/miniconda3/bin/python
 """A script for extracting raw data from LDEO type APG data loggers."""
-# Version 20220315
+# Version 20230601
 # by Neville Palmer, GNS Science
 # 2018/11/17 Start development
 
