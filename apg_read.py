@@ -1,6 +1,6 @@
 #!/home/nevillep/miniconda3/bin/python
 """A script for extracting raw data from LDEO type APG data loggers."""
-# Version 20220315
+# Version 20230630
 # by Neville Palmer, GNS Science
 # 2018/11/17 Start development
 
@@ -385,7 +385,7 @@ def main():
         f'"Actual" times are the actual recorded tick count values '
         f"before any adjustment for clock drift.\n"
         f"For some APG loggers, Nominal and Actual times correspond "
-        f"precisely, some do not. Generally CSAC loggers do and Seacan "
+        f"precisely, some do not. Generally CSAC loggers do and Seascan "
         f"loggers do not.\n"
         f"If a difference is noted below, the nominal epochs are not "
         f"precise and the tick count values have been used for precise "
@@ -526,10 +526,10 @@ def generate_results(
     actual_begin_tick = ticks[0]
     nominal_begin_tick = rec_begin * logger["record_epoch"]
     nominal_end_tick = (rec_begin + nrecs_want - 1) * logger["record_epoch"]
-    # print(f'Actual beginning tick:  {actual_begin_tick}')
-    # print(f'Nominal beginning tick: {nominal_begin_tick}')
-    # print(f'Actual end tick:        {actual_end_tick}')
-    # print(f'Nominal end tick:       {nominal_end_tick}')
+    # print(f"\nActual beginning tick:  {actual_begin_tick}")
+    # print(f"Nominal beginning tick: {nominal_begin_tick}")
+    # print(f"Actual end tick:        {actual_end_tick}")
+    # print(f"Nominal end tick:       {nominal_end_tick}\n")
 
     nom_ticks_t = np.linspace(
         nominal_begin_tick, nominal_end_tick, num=nrecs_want, endpoint=True
@@ -1095,10 +1095,26 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, trbl_sht, clk_st
         # ticks are equivalent to milliseconds
         ticks = records[:, last_field - logger["fmt_field"]["tic"]] - first_tic
 
-        # Remove tick count rollovers and make actual ticks continuously
-        # increasing.
         nominal_begin_tick = rec_begin * logger["record_epoch"]
         # print(f'Tick field length (in bits): {tic_field_len}')
+
+        # If time tick values are not pressent then populate tick values with
+        # assumed nominal tick count.
+        if ticks[-1] <= 0:
+            print(
+                "ATTENTION!!! It appears that time-tick values were not recorded "
+                "in the raw data file. All time values in the output are only "
+                "as accurate as the PCB oscillator. Values from the  precision "
+                "clock are not available!"
+            )
+            record_epoch = logger["sample_epoch"] * logger["smpls_per_rec"]
+            stop = nominal_begin_tick + (ticks.size) * record_epoch
+            ticks = np.arange(nominal_begin_tick, stop, record_epoch)
+            records[:, last_field - logger["fmt_field"]["tic"]] = ticks
+            return records
+
+        # Remove tick count rollovers and make actual ticks continuously
+        # increasing.
         rollover_period = 2 ** logger["tic_bit_len"]  # in millisec
         # print(f'Rollover length (in millisec/ticks): {rollover_period}')
         # The number of rollovers prior to the beginning of the specified data
