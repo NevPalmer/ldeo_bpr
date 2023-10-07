@@ -1,4 +1,3 @@
-#!/home/nevillep/miniconda3/bin/python
 """A script for extracting raw data from LDEO type APG data loggers."""
 # Version 20230630
 # by Neville Palmer, GNS Science
@@ -16,6 +15,12 @@ import scipy.signal as sig
 import scipy.stats as stat
 import obspy
 from numexpr import evaluate
+
+# miniSEED constants
+NWK_NAME_LEN = 2
+STN_NAME_LEN = 5
+P_CHNL_CODE = "HDH"
+T_CHNL_CODE = "BKO"
 
 
 def main():
@@ -41,7 +46,7 @@ def main():
     # Default values and choices for reading params from command line.
     apg_ini = "./ParosAPG.ini"
     logger_ini = "./APGlogger.ini"
-    logger_versions = ["CSAC2013", "Seascan2018"]
+    logger_versions = ["CSAC2013", "Seascan2018","TEST"]
     clk_start = "2000-01-01_00:00:00"  # 'YYYY-MM-DD_hh:mm:ss'
     bin_delta_ms = 0
     out_filename = ""
@@ -171,9 +176,21 @@ def main():
         type=lambda x: int(x, 0),
     )
     parser.add_argument(
+        "-w",
+        "--network",
+        help=(
+            f"Network name to be used in MiniSEED file header. Max "
+            f"{NWK_NAME_LEN} characters."
+        ),
+        default="",
+    )
+    parser.add_argument(
         "-n",
         "--station",
-        help="Station name to be used in MiniSEED file header. Max 5 characters.",
+        help=(
+            f"Station name to be used in MiniSEED file header. Max "
+            f"{STN_NAME_LEN} characters."
+        ),
         default="",
     )
     parser.add_argument(
@@ -262,14 +279,25 @@ def main():
         gpssync_dt = dt.datetime.strptime(gpssynctime, "%Y_%j_%H_%M_%S")
         gpssync_dt = pydt_to_dt64(gpssync_dt)
     sync_tick_count = args.synctickcount
+    nwk_name = args.network.strip()
+    if nwk_name and len(nwk_name) > 2:
+        sys.exit(
+            f"The network name (--network), if specified, must be max. "
+            f"{NWK_NAME_LEN} charcters."
+        )
     stn_name = args.station.strip()
+    if stn_name and len(nwk_name) > 2:
+        sys.exit(
+            f"The station name (--station), if specified, must be max. "
+            f"{STN_NAME_LEN} charcters."
+        )
     if args.outfile:
         out_filename = os.path.normpath(args.outfile)
     if args.mseedpath:
-        if not args.station:
+        if not args.station or not args.network:
             sys.exit(
-                "A station name must be specified using parameter --station "
-                "when genrating a MiniSEED file."
+                "Both a station name (--station) and a network name (--network) "
+                "must be specified when generating a MiniSEED file."
             )
         mseed_path = os.path.normpath(args.mseedpath)
     time_format = args.fmttime.strip()
@@ -419,6 +447,7 @@ def main():
         generate_results(
             logger,
             paros,
+            nwk_name,
             stn_name,
             fmt_field,
             clk_start_dt,
@@ -449,6 +478,7 @@ def main():
 def generate_results(
     logger,
     paros,
+    nwk_name,
     stn_name,
     fmt_field,
     clk_start_dt,
@@ -472,7 +502,9 @@ def generate_results(
 ):
     """This is the primary function used to extract and output results."""
     # Calculate window for extracting data.
-    bin_padding = 600000  # milliseconds
+    bin_padding = (tmptr_smth_fctr - 1) * logger["smpls_per_rec"] * 10
+    # bin_padding = 0
+    # bin_padding = 600000  # milliseconds
 
     bin_begin_ms = delta64_to_ms(bin_begin_dt - clk_start_dt)
     bin_len_ms = delta64_to_ms(bin_end_dt - bin_begin_dt)
@@ -637,18 +669,21 @@ def generate_results(
         f"Clock drift applied to the extracted block:  {drift_applied} ms.",
         flush=True,
     )
-    # Apply closk drift to time records.
+    # Apply clock drift to time records.
     millisecs_p = millisecs_p - drift_applied
     millisecs_t = millisecs_t - drift_applied
 
     # Temperature period (usec)
     TP = (temp_raw / (logger["TP_fctr"]) + logger["TP_cnst"]) / (logger["clock_freq"])
-    # Uncomment one of the lines below to hold temperature fixed
-    # TP.fill(5.8224) #Fixed temp for 140344
-    # TP.fill(5.7900) #Fixed temp for 140346
-    # TP.fill(5.7875) #Fixed temp of +3.06°C for 140339
-    # TP.fill(5.753) #Fixed temp of +2.27°C for 140338
-    # TP.fill(5.8475) #Fixed temp of +2.55°C for 136309
+    # Uncomment one of the lines below to ignore logged temperature values and
+    # assume a fixed value instead.
+    # TP.fill(5.8224) #Fixed temp for Paros 140344
+    # TP.fill(5.7900) #Fixed temp for Paros 140346
+    # TP.fill(5.7875) #Fixed temp of +3.06°C for Paros 140339
+    # TP.fill(5.7830) #Fixed temp of +20.65°C for Paros 140339
+    # TP.fill(5.7530) #Fixed temp of +2.27°C for Paros 140338
+    # TP.fill(5.8475) #Fixed temp of +2.55°C for Paros 136309
+    # TP.fill(5.8430) #Fixed temp of +20.08°C for Paros 136309
 
     # Pressure period (usec)
     PP = (press_raw / (logger["PP_fctr"]) + logger["PP_cnst"]) / (logger["clock_freq"])
@@ -857,33 +892,40 @@ def generate_results(
         bin_end_ms = bin_begin_ms + bin_len_ms
         mask = np.logical_and(millisecs_p >= bin_begin_ms, millisecs_p < bin_end_ms)
         pressure_mseed = pressure[mask]
-        temperature_mseed = temperature_upsmpld[mask]
+        mask = np.logical_and(millisecs_t >= bin_begin_ms, millisecs_t < bin_end_ms)
+        temperature_mseed = temperature_raw[mask]
         bin_begin = dt64_to_pydt(bin_begin_dt)
         stats = {
-            "network": "",
+            "network": nwk_name,
             "station": stn_name,
             "location": "",
-            "sampling_rate": 1000 / logger["sample_epoch"],
             "starttime": bin_begin,
             "mseed": {"dataquality": "R"},
         }
-        stats_p = stats.copy()
-        stats_p["channel"] = "HDH"
-        stats_t = stats.copy()
-        stats_t["channel"] = "HKO"
 
-        trace_p = obspy.Trace(data=pressure_mseed, header=stats_p)
-        trace_t = obspy.Trace(data=temperature_mseed, header=stats_t)
-        st = obspy.Stream(traces=[trace_p, trace_t])
+        dt_text = bin_begin.strftime("%Y-%m-%dT%H-%M-%Sz")
 
-        dt_text = bin_begin.strftime("%Y%m%d-%H%M")
-        mseed_filename = f"{dt_text}_{stn_name}.mseed"
+        stats["channel"] = P_CHNL_CODE
+        stats["sampling_rate"] = 1000 / logger["sample_epoch"]
+        trace_p = obspy.Trace(data=pressure_mseed, header=stats)
+        stream_p = obspy.Stream(traces=[trace_p])
+        mseed_filename = f"{nwk_name}_{stn_name}_{stats['channel']}_{dt_text}.mseed"
         mseed_filename = os.path.join(mseed_path, mseed_filename)
-        print(f'Writing results to MiniSEED file "{mseed_filename}".')
-        st.write(mseed_filename, format="MSEED")
+        print(f'Writing pressure data to MiniSEED file "{mseed_filename}".')
+        stream_p.write(mseed_filename, format="MSEED")
 
-        # Uncomment line below to see MiniSEED plot output.
-        # stream.plot()
+        stats["channel"] = T_CHNL_CODE
+        stats["sampling_rate"] = 1000 / logger["record_epoch"]
+        trace_t = obspy.Trace(data=temperature_mseed, header=stats)
+        stream_t = obspy.Stream(traces=[trace_t])
+        mseed_filename = f"{nwk_name}_{stn_name}_{stats['channel']}_{dt_text}.mseed"
+        mseed_filename = os.path.join(mseed_path, mseed_filename)
+        print(f'Writing temperature data to MiniSEED file "{mseed_filename}".')
+        stream_t.write(mseed_filename, format="MSEED")
+
+        # Uncomment line(s) below to see MiniSEED plot output.
+        # stream_t.plot()
+        # stream_p.plot()
 
     # Generate and output a plot
     if plot_flag != "n":
@@ -926,7 +968,7 @@ def generate_results(
         t_max = t_max - t_max % intvl + 2 * intvl
 
         # Plot Results
-        fig, ax2 = plt.subplots()
+        fig, ax2 = plt.subplots(figsize=(15, 9))
         plt.ylim(t_min, t_max)
         ax1 = ax2.twinx()
         plt.ylim(p_min, p_max)
@@ -994,7 +1036,7 @@ def generate_results(
         )
 
         fig.suptitle(f"{apg_filename}\nBegin: {bin_begin_dt}  -  " f"End: {bin_end_dt}")
-        fig.tight_layout()
+        plt.tight_layout()
         if time_format == "d":
             # Rotates and aligns the X-axis labels.
             plt.gcf().autofmt_xdate(bottom=0.2, rotation=30, ha="right")
@@ -1100,7 +1142,7 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, trbl_sht, clk_st
 
         # If time tick values are not pressent then populate tick values with
         # assumed nominal tick count.
-        if ticks[-1] <= 0:
+        if ticks[-1] <= 0 and ticks[1] <= 0:
             print(
                 "ATTENTION!!! It appears that time-tick values were not recorded "
                 "in the raw data file. All time values in the output are only "
