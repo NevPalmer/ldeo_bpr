@@ -229,20 +229,12 @@ def main():
         default="n",
     )
     parser.add_argument(
-        "--medfilt",
-        help="Apply a median filter to despike pressure data "
-        "using the window size specified. "
-        "The window size must be a positive odd integer.",
-        type=int,
-        default=0,
-    )
-    parser.add_argument(
-        "--meddiff",
-        help="Apply a binned median to pressure data and remove"
-        "any data points that are greater than the difference specified from the"
-        "median values. The difference must be a positive integer.",
-        type=int,
-        default=0,
+        "--noisefilt",
+        help="Apply a binned median to pressure & temperature data and remove"
+        "any data points that are greater than a predefined range from the"
+        "median values.",
+        action="store_true",
+        default=False,
     )
     args = parser.parse_args()
 
@@ -254,8 +246,7 @@ def main():
     logger_version = args.version.strip()
     decmt_intvl = args.decimate
     tmptr_smth_fctr = args.tempsmth
-    medfilt_wndw = args.medfilt
-    med_diff = args.meddiff
+    noisefilt = args.noisefilt
     clk_start = re.sub("[-: _/tT]", "_", args.clkstart)
     clk_start_dt = dt.datetime.strptime(clk_start, "%Y_%m_%d_%H_%M_%S")
     clk_start_dt = pydt_to_dt64(clk_start_dt)
@@ -460,8 +451,7 @@ def main():
             apg_filename,
             decmt_intvl,
             tmptr_smth_fctr,
-            medfilt_wndw,
-            med_diff,
+            noisefilt,
             time_format,
             plot_flag,
             plotout_flag,
@@ -491,8 +481,7 @@ def generate_results(
     apg_filename,
     decmt_intvl,
     tmptr_smth_fctr,
-    medfilt_wndw,
-    med_diff,
+    noisefilt,
     time_format,
     plot_flag,
     plotout_flag,
@@ -502,9 +491,12 @@ def generate_results(
 ):
     """This is the primary function used to extract and output results."""
     # Calculate window for extracting data.
-    bin_padding = (tmptr_smth_fctr - 1) * logger["smpls_per_rec"] * 10
-    # bin_padding = 0
-    # bin_padding = 600000  # milliseconds
+    if noisefilt:
+        bin_padding = 1_000_000  # milliseconds
+    else:    
+        bin_padding = (tmptr_smth_fctr - 1) * logger["smpls_per_rec"] * 10
+        # bin_padding = 0
+        # bin_padding = 600000  # milliseconds
 
     bin_begin_ms = delta64_to_ms(bin_begin_dt - clk_start_dt)
     bin_len_ms = delta64_to_ms(bin_end_dt - bin_begin_dt)
@@ -692,31 +684,35 @@ def generate_results(
     Uv_raw = TP_raw - paros["U"][0]
     temperature_raw = np.polyval(paros["Y"], Uv_raw)
 
-    if med_diff:
+    if noisefilt:
         # Temperature spike/noise removal
+        print("Temperature spike/noise removal.")
+        # Very course first pass removal based on impossible extremes.
         mask = np.where((temperature_raw < 0) | (temperature_raw > 30))
         temperature_del = np.delete(temperature_raw, mask)
         TP_del = np.delete(TP, mask)
         millisecs_t_del = np.delete(millisecs_t, mask)
 
-        # More refined removal based on binned median values
-        # Generate more refined spike removal by binning data and taking median
-        # of each bin, then interpolate back to size of full pressure dataset.
-        # Take difference of rough filter and raw pressure values. Where difference
-        # is greater than specified amount delete value and corresponding time stamp.
-        # Replace deleted data points with interpolated values.
-        bin_size = 1_000_000  # milliseconds
-        bins = int((millisecs_t.max() - millisecs_t.min()) / bin_size)
-        binned_tptr, bin_edges, _ = stat.binned_statistic(
-            millisecs_t_del, temperature_del, "median", bins
+        # More refined noise removal based on binned median values
+        TP_filt, millisecs_filt = remove_noise_meddiff(
+            raw_data=TP_del,
+            mask_data=temperature_del,
+            millisecs=millisecs_t_del,
+            millisecs_all=millisecs_t,
+            bin_size=1_000_000,
+            tolerance=0.02,
         )
-        bin_centers = (bin_edges[1:] + bin_edges[:-1]) / 2
-        tptr_medsmth = np.interp(millisecs_t_del, bin_centers, binned_tptr)
-        difference = np.abs(temperature_del - tptr_medsmth)
-        mask = np.where(difference > 0.01)
-        TP_del = np.delete(TP_del, mask)
-        millisecs_t_del = np.delete(millisecs_t_del, mask)
-        TP = np.interp(millisecs_t, millisecs_t_del, TP_del)
+        Uv_filt = TP_filt - paros["U"][0]
+        temperature_filt = np.polyval(paros["Y"], Uv_filt)
+        TP_filt, millisecs_filt = remove_noise_meddiff(
+            raw_data=TP_filt,
+            mask_data=temperature_filt,
+            millisecs=millisecs_filt,
+            millisecs_all=millisecs_t,
+            bin_size=1_000,
+            tolerance=0.005,
+        )
+        TP = np.interp(millisecs_t, millisecs_filt, TP_filt)
 
     # Apply smoothing filter to temperature before calculating pressure.
     # This eliminates significant noise from the pressure values.
@@ -742,42 +738,41 @@ def generate_results(
     pressure = pressure * press_conv_fctr  # Convert pressure units
     pressure_raw = pressure
 
-    if med_diff:
+    if noisefilt:
         # Pressure spike/noise removal
+        print("Pressure spike/noise removal.")
 
-        # Very course first pass removal based on overall median
-        # difference = np.abs(pressure - np.median(pressure))
-        # mask = np.where(difference > 20_000)
-        mask = np.where((pressure > 50_000_000) | (pressure < 0))
+        # Very course first pass removal based on likely spread from overall median
+        difference = np.abs(pressure - np.median(pressure))
+        mask = np.where(difference > 20_000)
+        # Very course first pass removal based on impossible extremes.
+        # mask = np.where((pressure > 50_000_000) | (pressure < 0))
         pressure_del = np.delete(pressure, mask)
         millisecs_del = np.delete(millisecs_p, mask)
 
-        # More refined removal based on binned median values
-        # Generate more refined spike removal by binning data and taking median
-        # of each bin, then interpolate back to size of full pressure dataset.
-        # Take difference of rough filter and raw pressure values. Where difference
-        # is greater than specified amount delete value and corresponding time stamp.
-        # Replace deleted data points with interpolated values.
-        bin_size = 1_000_000  # milliseconds
-        bins = int((millisecs_p.max() - millisecs_p.min()) / bin_size)
-        binned_press, bin_edges, _ = stat.binned_statistic(
-            millisecs_del, pressure_del, "median", bins
+        # Refined noise removal based on binned median values
+        pressure_filt, millisecs_filt = remove_noise_meddiff(
+            raw_data=pressure_del,
+            mask_data=pressure_del,
+            millisecs=millisecs_del,
+            millisecs_all=millisecs_p,
+            bin_size=10_000,
+            tolerance=50,
         )
-        bin_centers = (bin_edges[1:] + bin_edges[:-1]) / 2
-        pressure_medsmth = np.interp(millisecs_del, bin_centers, binned_press)
-        difference = np.abs(pressure_del - pressure_medsmth)
-        mask = np.where(difference > med_diff)
-        pressure_del = np.delete(pressure_del, mask)
-        millisecs_del = np.delete(millisecs_del, mask)
-        pressure = np.interp(millisecs_p, millisecs_del, pressure_del)
 
-    # Apply a median filter to further remove spikes from pressure data.
-    if medfilt_wndw:
-        print(
-            f"Applying Median Filter with a window of {medfilt_wndw} " f"samples.",
-            flush=True,
+        # Uncomment line below to plot first iteration pressure instead of raw pressure.
+        # pressure_raw = pressure
+
+        # Second iteration noise removal with tighter tollerances
+        pressure_filt, millisecs_filt = remove_noise_meddiff(
+            raw_data=pressure_filt,
+            mask_data=pressure_filt,
+            millisecs=millisecs_filt,
+            millisecs_all=millisecs_p,
+            bin_size=500,
+            tolerance=15,
         )
-        pressure = sig.medfilt(pressure, medfilt_wndw)
+        pressure = np.interp(millisecs_p, millisecs_filt, pressure_filt)
 
     # Decimate results
     # To produce sensible decimation results when ftype='iir',
@@ -976,7 +971,8 @@ def generate_results(
         # Plot raw pressure values if requested
         smthd = tmptr_smth_fctr >= 5
         dcmtd = decmt_intvl != 0
-        if dcmtd and plot_flag == "r":
+        # if dcmtd and plot_flag == "r":
+        if plot_flag == "r":
             if time_format == "d":
                 time_p = clk_start_dt + ms_to_delta64(millisecs_p)
             else:
@@ -991,7 +987,8 @@ def generate_results(
             )
 
         # Plot raw temperature values if requested
-        if (dcmtd or smthd) and plot_flag == "r":
+        # if (dcmtd or smthd) and plot_flag == "r":
+        if plot_flag == "r":
             if time_format == "d":
                 time_t = clk_start_dt + ms_to_delta64(millisecs_t)
             else:
@@ -1357,6 +1354,32 @@ def clockdrift(
     clk_drift_at_end = int(sync_tick_count - millisecs_logged)
 
     return clk_drift_at_end
+
+
+def remove_noise_meddiff(
+    raw_data, mask_data, millisecs, millisecs_all, bin_size, tolerance,
+):
+    """
+    Generate refined spike removal by binning data and taking median
+    of each bin (bin_size in milliseconds), then interpolate back to size of 
+    full dataset.
+    Take difference of binned median and raw values. Where difference (tollerance)
+    is greater than specified amount delete value and corresponding time stamp.
+    Replace deleted data points with interpolated values.
+    """
+    bins = int((millisecs_all.max() - millisecs_all.min()) / bin_size)
+    binned_tptr, bin_edges, _ = stat.binned_statistic(
+        millisecs, mask_data, "median", bins
+    )
+    bin_centers = (bin_edges[1:] + bin_edges[:-1]) / 2
+    tptr_medsmth = np.interp(millisecs, bin_centers, binned_tptr)
+    difference = np.abs(mask_data - tptr_medsmth)
+    mask = np.where(difference > tolerance)
+    raw_data = np.delete(raw_data, mask)
+    millisecs = np.delete(millisecs, mask)
+    return raw_data, millisecs
+    # return np.interp(millisecs_all, millisecs, raw_data)
+
 
 
 ###############################################################################
