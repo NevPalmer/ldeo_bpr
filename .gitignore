@@ -1,5 +1,9 @@
 __pycache__
+_*
 *.code-workspace
 *.xlsx
-temp
-_*
+temp/
+logs/
+data/
+working/
+**/test*

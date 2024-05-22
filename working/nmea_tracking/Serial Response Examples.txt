@@ -1,3 +1,0 @@
-b''
-b'RNG: TX = 11.0 RX = 12.00 time = 00.054 Sec.\r\n'
-b'CMD: 561562\r\n'
