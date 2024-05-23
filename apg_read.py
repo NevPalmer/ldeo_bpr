@@ -46,7 +46,7 @@ def main():
     # Default values and choices for reading params from command line.
     apg_ini = "./ParosAPG.ini"
     logger_ini = "./APGlogger.ini"
-    logger_versions = ["CSAC2013", "Seascan2018","TEST"]
+    logger_versions = ["CSAC2013", "Seascan2018", "TEST"]
     clk_start = "2000-01-01_00:00:00"  # 'YYYY-MM-DD_hh:mm:ss'
     bin_delta_ms = 0
     out_filename = ""
@@ -1357,11 +1357,16 @@ def clockdrift(
 
 
 def remove_noise_meddiff(
-    raw_data, mask_data, millisecs, millisecs_all, bin_size, tolerance,
+    raw_data,
+    mask_data,
+    millisecs,
+    millisecs_all,
+    bin_size,
+    tolerance,
 ):
     """
     Generate refined spike removal by binning data and taking median
-    of each bin (bin_size in milliseconds), then interpolate back to size of 
+    of each bin (bin_size in milliseconds), then interpolate back to size of
     full dataset.
     Take difference of binned median and raw values. Where difference (tollerance)
     is greater than specified amount delete value and corresponding time stamp.
@@ -1379,7 +1384,6 @@ def remove_noise_meddiff(
     millisecs = np.delete(millisecs, mask)
     return raw_data, millisecs
     # return np.interp(millisecs_all, millisecs, raw_data)
-
 
 
 ###############################################################################
