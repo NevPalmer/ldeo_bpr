@@ -15,7 +15,6 @@ import numpy as np
 import obspy
 import scipy.signal as sig
 import scipy.stats as stat
-from numexpr import evaluate
 
 # miniSEED constants
 NWK_NAME_LEN = 2
@@ -314,9 +313,9 @@ def main():
     logger["sample_epoch"] = logger_cfg.getint(logger_version, "epoch")
     logger["record_epoch"] = logger["sample_epoch"] * logger["smpls_per_rec"]
     logger["clock_freq"] = logger_cfg.getint(logger_version, "clock_freq")
-    logger["TP_fctr"] = evaluate(logger_cfg.get(logger_version, "TP_fctr")).item()
+    logger["TP_fctr"] = eval_exponent_str(logger_cfg.get(logger_version, "TP_fctr"))
     logger["TP_cnst"] = logger_cfg.getfloat(logger_version, "TP_cnst")
-    logger["PP_fctr"] = evaluate(logger_cfg.get(logger_version, "PP_fctr")).item()
+    logger["PP_fctr"] = eval_exponent_str(logger_cfg.get(logger_version, "PP_fctr"))
     logger["PP_cnst"] = logger_cfg.getfloat(logger_version, "PP_cnst")
     logger["timing"] = logger_cfg.get(logger_version, "timing")
 
@@ -966,9 +965,6 @@ def generate_results(
         plt.ylim(p_min, p_max)
 
         # Plot raw pressure values if requested
-        smthd = tmptr_smth_fctr >= 5
-        dcmtd = decmt_intvl != 0
-        # if dcmtd and plot_flag == "r":
         if plot_flag == "r":
             if time_format == "d":
                 time_p = clk_start_dt + ms_to_delta64(millisecs_p)
@@ -984,7 +980,6 @@ def generate_results(
             )
 
         # Plot raw temperature values if requested
-        # if (dcmtd or smthd) and plot_flag == "r":
         if plot_flag == "r":
             if time_format == "d":
                 time_t = clk_start_dt + ms_to_delta64(millisecs_t)
@@ -1417,5 +1412,25 @@ def ms_to_dt64(msec):
 
 
 ###############################################################################
+# Miscellaneous utility functions.
+def eval_exponent_str(exp_str: str) -> int:
+    """Convert a string in the form "X**Y" to an int.
+
+    Will also accept a pure integer string ("X") as input.
+    """
+    try:
+        return int(exp_str)
+    except ValueError:
+        base, exponent = exp_str.split("**", 1)
+        try:
+            return int(base) ** int(exponent)
+        except ValueError as err:
+            raise ValueError(
+                f"'{exp_str}' is not a valid exponent string to be evaluated."
+            ) from err
+
+
+###############################################################################
 if __name__ == "__main__":
-    main()
+    print(eval_exponent_str("2**28"))
+    # main()
