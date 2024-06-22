@@ -3,17 +3,18 @@
 # by Neville Palmer, GNS Science
 # 2018/11/17 Start development
 
-import os
-import sys
 import argparse
-from configparser import ConfigParser
-import re
 import datetime as dt
-import numpy as np
+import os
+import re
+import sys
+from configparser import ConfigParser
+
 import matplotlib.pyplot as plt
+import numpy as np
+import obspy
 import scipy.signal as sig
 import scipy.stats as stat
-import obspy
 from numexpr import evaluate
 
 # miniSEED constants
@@ -22,10 +23,12 @@ STN_NAME_LEN = 5
 P_CHNL_CODE = "HDH"
 T_CHNL_CODE = "BKO"
 
+# Pressure conversion factor from PSIA to Pascal.
+PRESS_CONV_FCTR = 6.894757293168e3
+
 
 def main():
     """The first function run when this script is run directly."""
-
     # Dictionary of flags for turning on/off trouble shooting outputs.
     # Assign False or '' to disable.
     trbl_sht = {
@@ -53,10 +56,6 @@ def main():
     mseed_path = ""
     tmptr_smth_fctr = 1
     decmt_intvl = 0
-
-    # Other constants.
-    # Pressure conversion factor from PSIA to Pascal.
-    press_conv_fctr = 6.894757293168e3
 
     # Read in parameters from command line
     helpdesc = (
@@ -447,7 +446,6 @@ def main():
             file_duration_ms,
             gpssync_dt,
             drift,
-            press_conv_fctr,
             apg_filename,
             decmt_intvl,
             tmptr_smth_fctr,
@@ -477,7 +475,6 @@ def generate_results(
     file_duration_ms,
     gpssync_dt,
     drift,
-    press_conv_fctr,
     apg_filename,
     decmt_intvl,
     tmptr_smth_fctr,
@@ -542,7 +539,7 @@ def generate_results(
     else:
         press_raw = records[:, pcore_col : pn_col - 1 : -1]
     press_raw = np.cumsum(press_raw, axis=1)
-    press_raw = press_raw.reshape((nrecs_want * logger["smpls_per_rec"]))
+    press_raw = press_raw.reshape(nrecs_want * logger["smpls_per_rec"])
     temp_raw = records[:, tptr_col]
     ticks = records[:, last_field - fmt_field["tic"]]  # ticks are millisecs
 
@@ -735,7 +732,7 @@ def generate_results(
 
     facts = 1 - (T0**2) / (PP**2)
     pressure = Cv * facts * (1 - Dv * facts)  # pressure in PSIA
-    pressure = pressure * press_conv_fctr  # Convert pressure units
+    pressure = pressure * PRESS_CONV_FCTR  # Convert pressure units
     pressure_raw = pressure
 
     if noisefilt:
@@ -1049,9 +1046,7 @@ def generate_results(
 
 ###########################################################################
 def extractrecords(apg_filename, logger, nrecs_want, rec_begin, trbl_sht, clk_start_dt):
-    """
-    Extracts binary records from a raw APG data logger file.
-    """
+    """Extracts binary records from a raw APG data logger file."""
     if trbl_sht["binary_out"]:
         binary_filename = "raw_binary.txt"
         # Create empty file, overwrite if exists.
@@ -1237,8 +1232,8 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, trbl_sht, clk_st
 def clockdrift(
     apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count, trbl_sht
 ):
-    """
-    Calculates the clock drift using one of two methods.
+    """Calculates the clock drift using one of two methods.
+
     The expected number of tick counts between clk_start_dt and gpssync_dt
     will be calculated. The size of the tick record in logger['tic_bit_len'] is
     used to determine when the tick count 'rolls over' to zero.
@@ -1249,7 +1244,6 @@ def clockdrift(
     count when this frequency starts is detected in the data and this value
     is used in place of sync_tick_count.
     """
-
     millisecs_logged = delta64_to_ms(gpssync_dt - clk_start_dt)
 
     if sync_tick_count is None:
@@ -1364,10 +1358,10 @@ def remove_noise_meddiff(
     bin_size,
     tolerance,
 ):
-    """
-    Generate refined spike removal by binning data and taking median
-    of each bin (bin_size in milliseconds), then interpolate back to size of
-    full dataset.
+    """Generate refined spike removal.
+
+    Bin data and take median of each bin (bin_size in milliseconds), then
+    interpolate back to size of full dataset.
     Take difference of binned median and raw values. Where difference (tollerance)
     is greater than specified amount delete value and corresponding time stamp.
     Replace deleted data points with interpolated values.
@@ -1410,8 +1404,8 @@ def ms_to_delta64(msec):
 
 
 def dt64_to_ms(dt64):
-    """
-    Convert a numpy datetime64 to milliseconds.
+    """Convert a numpy datetime64 to milliseconds.
+
     Returns an int64.
     """
     return int(dt64.astype("datetime64[ms]").astype("int64"))

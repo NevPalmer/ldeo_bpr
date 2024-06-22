@@ -1,7 +1,6 @@
 __pycache__
 _*
 *.code-workspace
-*.xlsx
 temp/
 logs/
 data/
