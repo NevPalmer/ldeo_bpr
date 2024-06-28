@@ -5,10 +5,10 @@
 
 import argparse
 import datetime as dt
-import os
 import re
 import sys
 from configparser import ConfigParser
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -46,13 +46,13 @@ def main():
     }
 
     # Default values and choices for reading params from command line.
-    apg_ini = "./ParosAPG.ini"
-    logger_ini = "./APGlogger.ini"
+    apg_ini = Path("./ParosAPG.ini")
+    logger_ini = Path("./APGlogger.ini")
     logger_versions = ["CSAC2013", "Seascan2018", "TEST"]
     clk_start = "2000-01-01_00:00:00"  # 'YYYY-MM-DD_hh:mm:ss'
     bin_delta_ms = 0
-    out_filename = ""
-    mseed_path = ""
+    out_filename = None
+    mseed_path = None
     tmptr_smth_fctr = 1
     decmt_intvl = 0
 
@@ -237,10 +237,10 @@ def main():
     args = parser.parse_args()
 
     # Translate argparse parameters (except for window times).
-    apg_filename = os.path.normpath(args.infile)
-    apg_ini = os.path.normpath(args.apgini)
+    apg_filename: Path = Path(args.infile)
+    apg_ini: Path = Path(args.apgini)
     apg_sn = args.snapg.strip()
-    logger_ini = os.path.normpath(args.loggerini)
+    logger_ini: Path = Path(args.loggerini)
     logger_version = args.version.strip()
     decmt_intvl = args.decimate
     tmptr_smth_fctr = args.tempsmth
@@ -281,14 +281,14 @@ def main():
             f"{STN_NAME_LEN} charcters."
         )
     if args.outfile:
-        out_filename = os.path.normpath(args.outfile)
+        out_filename = Path(args.outfile)
     if args.mseedpath:
         if not args.station or not args.network:
             sys.exit(
                 "Both a station name (--station) and a network name (--network) "
                 "must be specified when generating a MiniSEED file."
             )
-        mseed_path = os.path.normpath(args.mseedpath)
+        mseed_path = Path(args.mseedpath)
     time_format = args.fmttime.strip()
     plot_flag = args.plot.strip()[:1]
     plotout_flag = args.plot.strip()[1:]
@@ -348,7 +348,7 @@ def main():
 
     # Calculate duration and end time of raw file.
     try:
-        fsize = os.path.getsize(apg_filename)  # file size in bytes
+        fsize = apg_filename.stat().st_size  # file size in bytes
     except FileNotFoundError:
         sys.exit(f'Raw APG file "{apg_filename}" does not exist.')
     print(f"Filesize = {fsize} bytes")
@@ -474,15 +474,15 @@ def generate_results(
     file_duration_ms,
     gpssync_dt,
     drift,
-    apg_filename,
+    apg_filename: Path,
     decmt_intvl,
     tmptr_smth_fctr,
     noisefilt,
     time_format,
     plot_flag,
     plotout_flag,
-    out_filename,
-    mseed_path,
+    out_filename: Path,
+    mseed_path: Path,
     trbl_sht,
 ):
     """This is the primary function used to extract and output results."""
@@ -894,6 +894,8 @@ def generate_results(
             "mseed": {"dataquality": "R"},
         }
 
+        Path(mseed_path).mkdir(parents=True, exist_ok=True)
+
         dt_text = bin_begin.strftime("%Y-%m-%dT%H-%M-%Sz")
 
         stats["channel"] = P_CHNL_CODE
@@ -901,7 +903,7 @@ def generate_results(
         trace_p = obspy.Trace(data=pressure_mseed, header=stats)
         stream_p = obspy.Stream(traces=[trace_p])
         mseed_filename = f"{nwk_name}_{stn_name}_{stats['channel']}_{dt_text}.mseed"
-        mseed_filename = os.path.join(mseed_path, mseed_filename)
+        mseed_filename = mseed_path / mseed_filename
         print(f'Writing pressure data to MiniSEED file "{mseed_filename}".')
         stream_p.write(mseed_filename, format="MSEED")
 
@@ -910,7 +912,7 @@ def generate_results(
         trace_t = obspy.Trace(data=temperature_mseed, header=stats)
         stream_t = obspy.Stream(traces=[trace_t])
         mseed_filename = f"{nwk_name}_{stn_name}_{stats['channel']}_{dt_text}.mseed"
-        mseed_filename = os.path.join(mseed_path, mseed_filename)
+        mseed_filename = mseed_path / mseed_filename
         print(f'Writing temperature data to MiniSEED file "{mseed_filename}".')
         stream_t.write(mseed_filename, format="MSEED")
 
@@ -1030,7 +1032,7 @@ def generate_results(
             # Rotates and aligns the X-axis labels.
             plt.gcf().autofmt_xdate(bottom=0.2, rotation=30, ha="right")
         if plotout_flag in ["s", "b"]:
-            basename = os.path.splitext(os.path.basename(apg_filename))[0]
+            basename = apg_filename.stem
             fig.savefig(f"./{basename}.png", dpi=200)
         if plotout_flag in ["d", "b"]:
             plt.show()
@@ -1040,7 +1042,14 @@ def generate_results(
 
 
 ###########################################################################
-def extractrecords(apg_filename, logger, nrecs_want, rec_begin, trbl_sht, clk_start_dt):
+def extractrecords(
+    apg_filename: Path,
+    logger,
+    nrecs_want,
+    rec_begin,
+    trbl_sht,
+    clk_start_dt,
+):
     """Extracts binary records from a raw APG data logger file."""
     if trbl_sht["binary_out"]:
         binary_filename = "raw_binary.txt"
@@ -1053,7 +1062,7 @@ def extractrecords(apg_filename, logger, nrecs_want, rec_begin, trbl_sht, clk_st
 
     with open(apg_filename, "rb") as apgfile:
         begin_byte = logger["head_len"] + rec_begin * logger["rec_len"]
-        apgfile.seek(begin_byte, os.SEEK_CUR)
+        apgfile.seek(begin_byte, 0)
         records = []
         for i in range(0, nrecs_want):
             binary_record = apgfile.read(logger["rec_len"])
@@ -1432,5 +1441,4 @@ def eval_exponent_str(exp_str: str) -> int:
 
 ###############################################################################
 if __name__ == "__main__":
-    print(eval_exponent_str("2**28"))
-    # main()
+    main()
