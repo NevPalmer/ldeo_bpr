@@ -5,10 +5,10 @@ name = "ldeo_bpr"
 dynamic = ["version", "readme"]
 requires-python = ">= 3.9"
 dependencies = [
-    "matplotlib",
-    "numpy",
-    "obspy",
-    "scipy"
+    "matplotlib>=3.3",
+    "numpy>=1.22",
+    "obspy>=1.4",
+    "scipy>=1.7"
 ]
 authors = [{name= "Neville Palmer", email = "n.palmer@gns.cri.nz"}]
 description = """\

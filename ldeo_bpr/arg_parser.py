@@ -36,6 +36,12 @@ def parse_arguments(args=None) -> Namespace:
     )
     parser = ArgumentParser(description=helpdesc)
     parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"%(prog)s {bpr.__version__}",
+    )
+    parser.add_argument(
         "-i",
         "--infile",
         help="Full path and filename of raw APG input file.",
@@ -70,7 +76,7 @@ def parse_arguments(args=None) -> Namespace:
     )
     parser.add_argument(
         "-v",
-        "--version",
+        "--loggerversion",
         help="Specify the version/firmware of the APG logger board used.",
         choices=logger_versions,
         type=str,
@@ -286,6 +292,6 @@ def stn_name(stn_str: str) -> str:
     return stn_str.upper()
 
 
-def plot_flags(flags: str) -> dict[str:str]:
+def plot_flags(flags: str) -> dict[str, str]:
     """Validation functionfor --plot arg."""
     return {"format": flags[:1], "output": flags[1:]}

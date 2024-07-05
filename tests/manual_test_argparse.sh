@@ -2,7 +2,7 @@
 python -m tests.manual_test_argparse \
     --infile        "TAN1907_GNS18-01_136309.apg" \
     --snapg         136309    \
-    --version       CSAC2013 \
+    --loggerversion CSAC2013 \
     --tempsmth      1 \
     --decimate      0 \
     --clkstart      2018-10-12_07:11:30 \
@@ -26,7 +26,7 @@ python -m tests.manual_test_argparse \
 # python ~/scripts/ldeo_bpr/apg_read.py \
 #     --infile        TAN1907_GNS18-07_140338.apg \
 #     --snapg         140338 \
-#     --version       Seascan2018 \
+#     --loggerversion Seascan2018 \
 #     --tempsmth      1 \
 #     --decimate      0 \
 #     --clkstart      2019-02-25_14:00:30 \

@@ -54,29 +54,29 @@ def main():
     logger_cfg = ConfigParser()
     logger_cfg.read(args.loggerini)
     logger = {}
-    logger["head_len"] = logger_cfg.getint(args.version, "head_len")
-    logger["rec_len"] = logger_cfg.getint(args.version, "rec_len")
-    logger["smpls_per_rec"] = logger_cfg.getint(args.version, "smpls_per_rec")
-    logger["sample_epoch"] = logger_cfg.getint(args.version, "epoch")
+    logger["head_len"] = logger_cfg.getint(args.loggerversion, "head_len")
+    logger["rec_len"] = logger_cfg.getint(args.loggerversion, "rec_len")
+    logger["smpls_per_rec"] = logger_cfg.getint(args.loggerversion, "smpls_per_rec")
+    logger["sample_epoch"] = logger_cfg.getint(args.loggerversion, "epoch")
     logger["record_epoch"] = logger["sample_epoch"] * logger["smpls_per_rec"]
-    logger["clock_freq"] = logger_cfg.getint(args.version, "clock_freq")
-    logger["TP_fctr"] = eval_exponent_str(logger_cfg.get(args.version, "TP_fctr"))
-    logger["TP_cnst"] = logger_cfg.getfloat(args.version, "TP_cnst")
-    logger["PP_fctr"] = eval_exponent_str(logger_cfg.get(args.version, "PP_fctr"))
-    logger["PP_cnst"] = logger_cfg.getfloat(args.version, "PP_cnst")
-    logger["timing"] = logger_cfg.get(args.version, "timing")
+    logger["clock_freq"] = logger_cfg.getint(args.loggerversion, "clock_freq")
+    logger["TP_fctr"] = eval_exponent_str(logger_cfg.get(args.loggerversion, "TP_fctr"))
+    logger["TP_cnst"] = logger_cfg.getfloat(args.loggerversion, "TP_cnst")
+    logger["PP_fctr"] = eval_exponent_str(logger_cfg.get(args.loggerversion, "PP_fctr"))
+    logger["PP_cnst"] = logger_cfg.getfloat(args.loggerversion, "PP_cnst")
+    logger["timing"] = logger_cfg.get(args.loggerversion, "timing")
 
-    logger["rec_fmt"] = logger_cfg.get(args.version, "rec_fmt").split(",")
+    logger["rec_fmt"] = logger_cfg.get(args.loggerversion, "rec_fmt").split(",")
     logger["rec_fmt"] = tuple([int(x) for x in logger["rec_fmt"]])
     fmt_field = {}
-    fmt_field["tic"] = logger_cfg.getint(args.version, "tic_field")
-    fmt_field["tptr"] = logger_cfg.getint(args.version, "temperature_field")
-    fmt_field["pcore"] = logger_cfg.getint(args.version, "pcore_field")
-    fmt_field["pn"] = logger_cfg.getint(args.version, "pn_field")
+    fmt_field["tic"] = logger_cfg.getint(args.loggerversion, "tic_field")
+    fmt_field["tptr"] = logger_cfg.getint(args.loggerversion, "temperature_field")
+    fmt_field["pcore"] = logger_cfg.getint(args.loggerversion, "pcore_field")
+    fmt_field["pn"] = logger_cfg.getint(args.loggerversion, "pn_field")
     if abs(fmt_field["pcore"] - fmt_field["pn"] + 1) != logger["smpls_per_rec"]:
         sys.exit(
             f"The number of samples per record "
-            f"({logger['smpls_per_rec'] }) for logger {args.version}, "
+            f"({logger['smpls_per_rec'] }) for logger {args.loggerversion}, "
             f"does not match the number of Pcore and Pn fields in the "
             f"record format (Pcore through Pn inclusive = "
             f"{fmt_field['pcore']-fmt_field['pn']+1}), "
