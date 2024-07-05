@@ -2,7 +2,6 @@
 
 import datetime as dt
 import sys
-from configparser import ConfigParser
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -33,65 +32,21 @@ def main():
         "tic_sync": False,
     }
 
-    # Retrieve arguments from CLI.
+    # Retrieve CLI parameters.
     args = bpr.parse_arguments()
 
     print("=" * 80)
     print(f"STATS OF RAW FILE: {args.infile}")
     print(f"Time of first sample = {args.clkstart}")
 
-    # Read Paros transducer coefficients into a dict of lists from ini file.
-    paros_coefs = ("U", "Y", "C", "D", "T")
-    paros_cfg = ConfigParser()
-    paros_cfg.read(args.apgini)
-    paros = {}
-    for coef in paros_coefs:
-        paros[coef] = paros_cfg.get(args.snapg, coef).split(",")
-        paros[coef] = [float(x) for x in paros[coef][::-1]]
-    paros["Y"].append(0.0)
+    # Read Paros transducer coefficients from .ini file.
+    paros = bpr.Paros.from_file(filename=args.apgini, paros_sn=args.snapg)
 
-    # Read APG logger configuration parameters from ini file.
-    logger_cfg = ConfigParser()
-    logger_cfg.read(args.loggerini)
-    logger = {}
-    logger["head_len"] = logger_cfg.getint(args.loggerversion, "head_len")
-    logger["rec_len"] = logger_cfg.getint(args.loggerversion, "rec_len")
-    logger["smpls_per_rec"] = logger_cfg.getint(args.loggerversion, "smpls_per_rec")
-    logger["sample_epoch"] = logger_cfg.getint(args.loggerversion, "epoch")
-    logger["record_epoch"] = logger["sample_epoch"] * logger["smpls_per_rec"]
-    logger["clock_freq"] = logger_cfg.getint(args.loggerversion, "clock_freq")
-    logger["TP_fctr"] = eval_exponent_str(logger_cfg.get(args.loggerversion, "TP_fctr"))
-    logger["TP_cnst"] = logger_cfg.getfloat(args.loggerversion, "TP_cnst")
-    logger["PP_fctr"] = eval_exponent_str(logger_cfg.get(args.loggerversion, "PP_fctr"))
-    logger["PP_cnst"] = logger_cfg.getfloat(args.loggerversion, "PP_cnst")
-    logger["timing"] = logger_cfg.get(args.loggerversion, "timing")
-
-    logger["rec_fmt"] = logger_cfg.get(args.loggerversion, "rec_fmt").split(",")
-    logger["rec_fmt"] = tuple([int(x) for x in logger["rec_fmt"]])
-    fmt_field = {}
-    fmt_field["tic"] = logger_cfg.getint(args.loggerversion, "tic_field")
-    fmt_field["tptr"] = logger_cfg.getint(args.loggerversion, "temperature_field")
-    fmt_field["pcore"] = logger_cfg.getint(args.loggerversion, "pcore_field")
-    fmt_field["pn"] = logger_cfg.getint(args.loggerversion, "pn_field")
-    if abs(fmt_field["pcore"] - fmt_field["pn"] + 1) != logger["smpls_per_rec"]:
-        sys.exit(
-            f"The number of samples per record "
-            f"({logger['smpls_per_rec'] }) for logger {args.loggerversion}, "
-            f"does not match the number of Pcore and Pn fields in the "
-            f"record format (Pcore through Pn inclusive = "
-            f"{fmt_field['pcore']-fmt_field['pn']+1}), "
-            f"as provided in file {args.loggerini}."
-        )
-    rec_fmt_bits = int(sum(map(abs, logger["rec_fmt"])))
-    if rec_fmt_bits != (logger["rec_len"] * 8):
-        sys.exit(
-            f"The total number of bits ({rec_fmt_bits}) given by the "
-            f"record format {logger['rec_fmt'] } "
-            f"does not equal the record length ({logger['rec_len'] } "
-            f"bytes x 8), as provided in the file {args.loggerini}."
-        )
-    logger["fmt_field"] = fmt_field
-    logger["tic_bit_len"] = logger["rec_fmt"][fmt_field["tic"]]
+    # Read APG logger configuration parameters from .ini file.
+    logger = bpr.Logger.from_file(
+        filename=args.loggerini,
+        logger_version=args.loggerversion,
+    )
 
     # Calculate duration and end time of raw file.
     try:
@@ -99,9 +54,9 @@ def main():
     except FileNotFoundError:
         sys.exit(f'Raw APG file "{args.infile}" does not exist.')
     print(f"Filesize = {fsize} bytes")
-    nrecs = int((fsize - logger["head_len"]) / logger["rec_len"]) - 1
+    nrecs = int((fsize - logger.head_len) / logger.rec_len) - 1
     print(f"Number of records = {nrecs:d}")
-    file_duration_ms = nrecs * logger["record_epoch"]
+    file_duration_ms = nrecs * logger.record_epoch
     file_duration_secs = file_duration_ms / 1000
     file_duration_days = file_duration_secs / 3600 / 24
     print(f"File duration = {file_duration_days} days")
@@ -142,7 +97,7 @@ def main():
         f"NOTE: All times given above are Nominal. \n"
         f'"Nominal" times are calculated by counting the number '
         f"of sample epochs multiplied by the sample period "
-        f'({logger["sample_epoch"]} secs).\n'
+        f"({logger.sample_epoch} secs).\n"
         f'"Actual" times are the actual recorded tick count values '
         f"before any adjustment for clock drift.\n"
         f"For some APG loggers, Nominal and Actual times correspond "
@@ -182,7 +137,6 @@ def main():
             paros,
             args.network,
             args.station,
-            fmt_field,
             args.clkstart,
             bin_begin_dt,
             bin_end_dt,
@@ -206,11 +160,10 @@ def main():
 
 ###############################################################################
 def generate_results(
-    logger,
-    paros,
+    logger: bpr.Logger,
+    paros: bpr.Paros,
     nwk_name,
     stn_name,
-    fmt_field,
     clk_start_dt,
     bin_begin_dt,
     bin_end_dt,
@@ -225,14 +178,14 @@ def generate_results(
     plot_flags,
     out_filename: Path,
     mseed_path: Path,
-    trbl_sht,
+    trbl_sht: dict[str, bool],
 ):
     """This is the primary function used to extract and output results."""
     # Calculate window for extracting data.
     if noisefilt:
         bin_padding = 1_000_000  # milliseconds
     else:
-        bin_padding = (tmptr_smth_fctr - 1) * logger["smpls_per_rec"] * 10
+        bin_padding = (tmptr_smth_fctr - 1) * logger.smpls_per_rec * 10
         # bin_padding = 0
         # bin_padding = 600000  # milliseconds
 
@@ -251,8 +204,8 @@ def generate_results(
     if (avail_bin_len_ms - padded_bin_len_ms) <= 0:
         padded_bin_len_ms = padded_bin_len_ms - bin_padding
 
-    rec_begin = int(padded_bin_begin_ms / logger["record_epoch"])
-    nrecs_want = int(padded_bin_len_ms / logger["record_epoch"]) + 1
+    rec_begin = int(padded_bin_begin_ms / logger.record_epoch)
+    nrecs_want = int(padded_bin_len_ms / logger.record_epoch) + 1
 
     # Extract records from APG file for the time window specified.
     print("Extracting raw records:\n", end="")
@@ -269,25 +222,25 @@ def generate_results(
 
     # Assign names to column numbers of raw data array.
     # Note that raw data array columns are reverse order to raw binary.
-    last_field = len(logger["rec_fmt"]) - 1
-    pcore_col = last_field - fmt_field["pcore"]
-    pn_col = last_field - fmt_field["pn"]
-    tptr_col = last_field - fmt_field["tptr"]
+    last_field = len(logger.rec_fmt) - 1
+    pcore_col = last_field - logger.fmt_field["pcore"]
+    pn_col = last_field - logger.fmt_field["pn"]
+    tptr_col = last_field - logger.fmt_field["tptr"]
 
-    # Create an array for each raw observable (pressure, temperature, ticks)
+    # Create an array for each raw observable (pressure, temperature, ticks_ms)
     if pn_col > pcore_col:
         press_raw = records[:, pcore_col : pn_col + 1]
     else:
         press_raw = records[:, pcore_col : pn_col - 1 : -1]
     press_raw = np.cumsum(press_raw, axis=1)
-    press_raw = press_raw.reshape(nrecs_want * logger["smpls_per_rec"])
+    press_raw = press_raw.reshape(nrecs_want * logger.smpls_per_rec)
     temp_raw = records[:, tptr_col]
-    ticks = records[:, last_field - fmt_field["tic"]]  # ticks are millisecs
+    ticks_ms = records[:, last_field - logger.fmt_field["tic"]]
 
-    actual_end_tick = ticks[-1]
-    actual_begin_tick = ticks[0]
-    nominal_begin_tick = rec_begin * logger["record_epoch"]
-    nominal_end_tick = (rec_begin + nrecs_want - 1) * logger["record_epoch"]
+    actual_end_tick = ticks_ms[-1]
+    actual_begin_tick = ticks_ms[0]
+    nominal_begin_tick = rec_begin * logger.record_epoch
+    nominal_end_tick = (rec_begin + nrecs_want - 1) * logger.record_epoch
     # print(f"\nActual beginning tick:  {actual_begin_tick}")
     # print(f"Nominal beginning tick: {nominal_begin_tick}")
     # print(f"Actual end tick:        {actual_end_tick}")
@@ -298,29 +251,29 @@ def generate_results(
     ).astype("int64")
     nom_ticks_p = np.linspace(
         nominal_begin_tick,
-        nominal_end_tick + logger["record_epoch"],
-        num=nrecs_want * logger["smpls_per_rec"],
+        nominal_end_tick + logger.record_epoch,
+        num=nrecs_want * logger.smpls_per_rec,
         endpoint=False,
     ).astype("int64")
 
     # Write a summary file showing syncronised tic counts and exit.
     if trbl_sht["tic_sync"]:
-        time_diff = ticks - nom_ticks_t
-        ticks = np.column_stack((ticks, nom_ticks_t, time_diff))
-        summary_ticks = [ticks[0]]
+        time_diff = ticks_ms - nom_ticks_t
+        ticks_ms = np.column_stack((ticks_ms, nom_ticks_t, time_diff))
+        summary_ticks_ms = [ticks_ms[0]]
         for i in range(1, len(time_diff)):
             if time_diff[i] != time_diff[i - 1]:
-                summary_ticks.append(ticks[i])
+                summary_ticks_ms.append(ticks_ms[i])
         np.savetxt(
-            "summary_ticks.txt",
-            summary_ticks,
+            "summary_ticks_ms.txt",
+            summary_ticks_ms,
             fmt="%d",
             header="actual,nominal,difference",
             comments="",
         )
         np.savetxt(
-            "ticks.txt",
-            ticks,
+            "ticks_ms.txt",
+            ticks_ms,
             fmt="%d",
             header="actual,nominal,difference",
             comments="",
@@ -357,29 +310,27 @@ def generate_results(
 
         # Determine first tick count to achieve fixed period epochs.
         final_begin_tick = actual_begin_tick + (
-            logger["record_epoch"] - actual_begin_tick % logger["record_epoch"]
+            logger.record_epoch - actual_begin_tick % logger.record_epoch
         )
         # Determine final tick count to achieve fixed period epochs.
-        final_end_tick = actual_end_tick - (actual_end_tick % logger["record_epoch"])
-        epoch_count = (
-            int((final_end_tick - final_begin_tick) / logger["record_epoch"]) + 1
-        )
+        final_end_tick = actual_end_tick - (actual_end_tick % logger.record_epoch)
+        epoch_count = int((final_end_tick - final_begin_tick) / logger.record_epoch) + 1
         millisecs_t = np.linspace(
             final_begin_tick, final_end_tick, num=epoch_count, endpoint=True
         ).astype("int64")
         millisecs_p = np.linspace(
             final_begin_tick,
-            final_end_tick + logger["record_epoch"],
-            num=epoch_count * logger["smpls_per_rec"],
+            final_end_tick + logger.record_epoch,
+            num=epoch_count * logger.smpls_per_rec,
             endpoint=False,
         ).astype("int64")
-        ticks_ext = np.append(ticks, ticks[-1] + logger["record_epoch"])
-        nom_ticks_t = np.append(nom_ticks_t, nom_ticks_t[-1] + logger["record_epoch"])
+        ticks_ext = np.append(ticks_ms, ticks_ms[-1] + logger.record_epoch)
+        nom_ticks_t = np.append(nom_ticks_t, nom_ticks_t[-1] + logger.record_epoch)
 
         ticks_p = np.interp(nom_ticks_p, nom_ticks_t, ticks_ext)
 
         # Interpolate to generate fixed period observation epochs.
-        temp_raw = np.interp(millisecs_t, ticks, temp_raw)
+        temp_raw = np.interp(millisecs_t, ticks_ms, temp_raw)
         press_raw = np.interp(millisecs_p, ticks_p, press_raw)
 
     # Apply clock drift to time values
@@ -388,12 +339,10 @@ def generate_results(
     millisecs_logged = delta64_to_ms(gpssync_dt - clk_start_dt)
     drift_beg = drift * (millisecs_t[0] / millisecs_logged)
     drift_end = drift * (millisecs_t[-1] / millisecs_logged)
-    # print(f'Clock drift at beginning of extracted block: {drift_beg} ms.')
-    # print(f'Clock drift at end of extracted block:       {drift_end} ms.')
     drift_applied = (drift_beg + drift_end) / 2
     # Round the drift to be applied to the  nearest whole sample epoch.
     drift_applied = int(
-        logger["sample_epoch"] * round(drift_applied / logger["sample_epoch"], 0)
+        logger.sample_epoch * round(drift_applied / logger.sample_epoch, 0)
     )
     print(
         f"Clock drift applied to the extracted block:  {drift_applied} ms.",
@@ -404,23 +353,27 @@ def generate_results(
     millisecs_t = millisecs_t - drift_applied
 
     # Temperature period (usec)
-    TP = (temp_raw / (logger["TP_fctr"]) + logger["TP_cnst"]) / (logger["clock_freq"])
+    tmptr_period_usec = (temp_raw / (logger.tp_fctr) + logger.tp_cnst) / (
+        logger.clock_freq
+    )
     # Uncomment one of the lines below to ignore logged temperature values and
     # assume a fixed value instead.
-    # TP.fill(5.8224) #Fixed temp for Paros 140344
-    # TP.fill(5.7900) #Fixed temp for Paros 140346
-    # TP.fill(5.7875) #Fixed temp of +3.06°C for Paros 140339
-    # TP.fill(5.7830) #Fixed temp of +20.65°C for Paros 140339
-    # TP.fill(5.7530) #Fixed temp of +2.27°C for Paros 140338
-    # TP.fill(5.8475) #Fixed temp of +2.55°C for Paros 136309
-    # TP.fill(5.8430) #Fixed temp of +20.08°C for Paros 136309
+    # tmptr_period_usec.fill(5.8224) #Fixed temp for Paros 140344
+    # tmptr_period_usec.fill(5.7900) #Fixed temp for Paros 140346
+    # tmptr_period_usec.fill(5.7875) #Fixed temp of +3.06°C for Paros 140339
+    # tmptr_period_usec.fill(5.7830) #Fixed temp of +20.65°C for Paros 140339
+    # tmptr_period_usec.fill(5.7530) #Fixed temp of +2.27°C for Paros 140338
+    # tmptr_period_usec.fill(5.8475) #Fixed temp of +2.55°C for Paros 136309
+    # tmptr_period_usec.fill(5.8430) #Fixed temp of +20.08°C for Paros 136309
 
     # Pressure period (usec)
-    PP = (press_raw / (logger["PP_fctr"]) + logger["PP_cnst"]) / (logger["clock_freq"])
+    presr_period_usec = (press_raw / (logger.pp_fctr) + logger.pp_cnst) / (
+        logger.clock_freq
+    )
 
-    TP_raw = TP
-    Uv_raw = TP_raw - paros["U"][0]
-    temperature_raw = np.polyval(paros["Y"], Uv_raw)
+    tmptr_period_usec_raw = tmptr_period_usec
+    coef_uv_raw = tmptr_period_usec_raw - paros.u[0]
+    temperature_raw = np.polyval(paros.y, coef_uv_raw)
 
     if noisefilt:
         # Temperature spike/noise removal
@@ -428,51 +381,55 @@ def generate_results(
         # Very course first pass removal based on impossible extremes.
         mask = np.where((temperature_raw < 0) | (temperature_raw > 30))
         temperature_del = np.delete(temperature_raw, mask)
-        TP_del = np.delete(TP, mask)
+        tmptr_period_usec_del = np.delete(tmptr_period_usec, mask)
         millisecs_t_del = np.delete(millisecs_t, mask)
 
         # More refined noise removal based on binned median values
-        TP_filt, millisecs_filt = remove_noise_meddiff(
-            raw_data=TP_del,
+        tmptr_period_usec_filt, millisecs_filt = remove_noise_meddiff(
+            raw_data=tmptr_period_usec_del,
             mask_data=temperature_del,
             millisecs=millisecs_t_del,
             millisecs_all=millisecs_t,
             bin_size=1_000_000,
             tolerance=0.02,
         )
-        Uv_filt = TP_filt - paros["U"][0]
-        temperature_filt = np.polyval(paros["Y"], Uv_filt)
-        TP_filt, millisecs_filt = remove_noise_meddiff(
-            raw_data=TP_filt,
+        coef_uv_filt = tmptr_period_usec_filt - paros.u[0]
+        temperature_filt = np.polyval(paros.y, coef_uv_filt)
+        tmptr_period_usec_filt, millisecs_filt = remove_noise_meddiff(
+            raw_data=tmptr_period_usec_filt,
             mask_data=temperature_filt,
             millisecs=millisecs_filt,
             millisecs_all=millisecs_t,
             bin_size=1_000,
             tolerance=0.005,
         )
-        TP = np.interp(millisecs_t, millisecs_filt, TP_filt)
+        tmptr_period_usec = np.interp(
+            millisecs_t, millisecs_filt, tmptr_period_usec_filt
+        )
 
     # Apply smoothing filter to temperature before calculating pressure.
     # This eliminates significant noise from the pressure values.
     if tmptr_smth_fctr >= 5:
         print("Applying temperature smoothing filter.", flush=True)
-        TP = sig.savgol_filter(TP, tmptr_smth_fctr, 3, axis=0, mode="mirror")
+        tmptr_period_usec = sig.savgol_filter(
+            tmptr_period_usec, tmptr_smth_fctr, 3, axis=0, mode="mirror"
+        )
 
     # Calculate temperature array
     print("Calculating temperatures and pressures.", flush=True)
-    Uv = TP - paros["U"][0]
+    coef_uv = tmptr_period_usec - paros.u[0]
     # Upsample temperatures to match frequency of pressure samples by
     #  linear interpolation.
-    Uv_expnd = np.interp(millisecs_p, millisecs_t, Uv)
-    temperature_upsmpld = np.polyval(paros["Y"], Uv_expnd)
+    coef_uv_expnd = np.interp(millisecs_p, millisecs_t, coef_uv)
+    temperature_upsmpld = np.polyval(paros.y, coef_uv_expnd)
 
     # Calculate pressure array
-    Cv = np.polyval(paros["C"], Uv_expnd)
-    Dv = np.polyval(paros["D"], Uv_expnd)
-    T0 = np.polyval(paros["T"], Uv_expnd)
+    coef_cv = np.polyval(paros.c, coef_uv_expnd)
+    coef_dv = np.polyval(paros.d, coef_uv_expnd)
+    coef_t0 = np.polyval(paros.t, coef_uv_expnd)
 
-    facts = 1 - (T0**2) / (PP**2)
-    pressure = Cv * facts * (1 - Dv * facts)  # pressure in PSIA
+    facts = 1 - (coef_t0**2) / (presr_period_usec**2)
+    pressure = coef_cv * facts * (1 - coef_dv * facts)  # pressure in PSIA
     pressure = pressure * bpr.PRESS_CONV_FCTR  # Convert pressure units
     pressure_raw = pressure
 
@@ -541,7 +498,7 @@ def generate_results(
         temperature_dcmtd = temperature_dcmtd[mask]
 
         # First decimate to whole seconds
-        sample_freq = int(1000 / logger["sample_epoch"])
+        sample_freq = int(1000 / logger.sample_epoch)
         decmt_intvl_pre = sample_freq
         first = True
         while decmt_intvl_pre > 1:
@@ -641,7 +598,7 @@ def generate_results(
         dt_text = bin_begin.strftime("%Y-%m-%dT%H-%M-%Sz")
 
         stats["channel"] = bpr.P_CHNL_CODE
-        stats["sampling_rate"] = 1000 / logger["sample_epoch"]
+        stats["sampling_rate"] = 1000 / logger.sample_epoch
         trace_p = obspy.Trace(data=pressure_mseed, header=stats)
         stream_p = obspy.Stream(traces=[trace_p])
         mseed_filename = f"{nwk_name}_{stn_name}_{stats['channel']}_{dt_text}.mseed"
@@ -650,7 +607,7 @@ def generate_results(
         stream_p.write(mseed_filename, format="MSEED")
 
         stats["channel"] = bpr.T_CHNL_CODE
-        stats["sampling_rate"] = 1000 / logger["record_epoch"]
+        stats["sampling_rate"] = 1000 / logger.record_epoch
         trace_t = obspy.Trace(data=temperature_mseed, header=stats)
         stream_t = obspy.Stream(traces=[trace_t])
         mseed_filename = f"{nwk_name}_{stn_name}_{stats['channel']}_{dt_text}.mseed"
@@ -786,11 +743,11 @@ def generate_results(
 ###########################################################################
 def extractrecords(
     apg_filename: Path,
-    logger,
-    nrecs_want,
-    rec_begin,
-    trbl_sht,
-    clk_start_dt,
+    logger: bpr.Logger,
+    nrecs_want: int,
+    rec_begin: int,
+    trbl_sht: dict[str, bool],
+    clk_start_dt: np.datetime64,
 ):
     """Extracts binary records from a raw APG data logger file."""
     if trbl_sht["binary_out"]:
@@ -803,18 +760,18 @@ def extractrecords(
         open(hex_filename, "w", encoding="utf8").close()
 
     with open(apg_filename, "rb") as apgfile:
-        begin_byte = logger["head_len"] + rec_begin * logger["rec_len"]
+        begin_byte = logger.head_len + rec_begin * logger.rec_len
         apgfile.seek(begin_byte, 0)
         records = []
         for i in range(0, nrecs_want):
-            binary_record = apgfile.read(logger["rec_len"])
+            binary_record = apgfile.read(logger.rec_len)
 
             # Print record as a string of Binary values to file.
             if trbl_sht["binary_out"]:
                 bin_str = ""
                 for ch in binary_record:
                     bin_str += f"{ch:08b}"
-                cum_rec_fmt = np.cumsum(list(map(abs, logger["rec_fmt"])))
+                cum_rec_fmt = np.cumsum(list(map(abs, logger.rec_fmt)))
                 bin_str_dlmtd = ""
                 for count, char in enumerate(bin_str):
                     if count in cum_rec_fmt:
@@ -835,7 +792,7 @@ def extractrecords(
             # by logger['rec_fmt'] .
             record_int = int.from_bytes(binary_record, byteorder="big", signed=False)
             record = []
-            for signed_bit_len in reversed(logger["rec_fmt"]):
+            for signed_bit_len in reversed(logger.rec_fmt):
                 bit_len = int(abs(signed_bit_len))
                 # Read right most bit_len bits
                 field = record_int & (2**bit_len - 1)
@@ -867,35 +824,34 @@ def extractrecords(
 
         # Shift the tick count if necessary, so that it relates to the first
         # sample in each record (instead of the last).
-        if logger["timing"] == "first":
+        if logger.timing == "first":
             first_tic = 0
-        elif logger["timing"] == "last":
-            first_tic = int((logger["smpls_per_rec"] - 1) * logger["sample_epoch"])
-        last_field = len(logger["rec_fmt"]) - 1
-        # ticks are equivalent to milliseconds
-        ticks = records[:, last_field - logger["fmt_field"]["tic"]] - first_tic
+        elif logger.timing == "last":
+            first_tic = int((logger.smpls_per_rec - 1) * logger.sample_epoch)
+        last_field = len(logger.rec_fmt) - 1
+        ticks_ms = records[:, last_field - logger.fmt_field["tic"]] - first_tic
 
-        nominal_begin_tick = rec_begin * logger["record_epoch"]
+        nominal_begin_tick = rec_begin * logger.record_epoch
         # print(f'Tick field length (in bits): {tic_field_len}')
 
         # If time tick values are not pressent then populate tick values with
         # assumed nominal tick count.
-        if ticks[-1] <= 0 and ticks[1] <= 0:
+        if ticks_ms[-1] <= 0 and ticks_ms[1] <= 0:
             print(
                 "ATTENTION!!! It appears that time-tick values were not recorded "
                 "in the raw data file. All time values in the output are only "
                 "as accurate as the PCB oscillator. Values from the  precision "
                 "clock are not available!"
             )
-            record_epoch = logger["sample_epoch"] * logger["smpls_per_rec"]
-            stop = nominal_begin_tick + (ticks.size) * record_epoch
-            ticks = np.arange(nominal_begin_tick, stop, record_epoch)
-            records[:, last_field - logger["fmt_field"]["tic"]] = ticks
+            record_epoch = logger.sample_epoch * logger.smpls_per_rec
+            stop = nominal_begin_tick + (ticks_ms.size) * record_epoch
+            ticks_ms = np.arange(nominal_begin_tick, stop, record_epoch)
+            records[:, last_field - logger.fmt_field["tic"]] = ticks_ms
             return records
 
         # Remove tick count rollovers and make actual ticks continuously
         # increasing.
-        rollover_period = 2 ** logger["tic_bit_len"]  # in millisec
+        rollover_period = 2**logger.tic_bit_len  # in millisec
         # print(f'Rollover length (in millisec/ticks): {rollover_period}')
         # The number of rollovers prior to the beginning of the specified data
         # window.
@@ -903,9 +859,9 @@ def extractrecords(
         nom_rollover_balance = nominal_begin_tick % rollover_period
         # Does the nominal rollover count of the first record align with the
         # actual count. (Within 1e7 millisec or approx 166 minutes.)
-        if abs(ticks[0] - nom_rollover_balance) < 1e7:
+        if abs(ticks_ms[0] - nom_rollover_balance) < 1e7:
             actl_rollovers_begin = nom_rollovers_begin
-        elif ticks[0] - nom_rollover_balance > 1e7:
+        elif ticks_ms[0] - nom_rollover_balance > 1e7:
             # This indicates that a nominal rollover should have occurred but
             # the actual rollover hasn't yet.
             actl_rollovers_begin = nom_rollovers_begin - 1
@@ -915,12 +871,10 @@ def extractrecords(
             actl_rollovers_begin = nom_rollovers_begin + 1
 
         # {rollovers} contains index of the first record after each rollover.
-        rollovers = np.where(ticks[:-1] > ticks[1:])[0] + 1
-        # print(f'Index values of rollovers within ticks array: {rollovers}')
+        rollovers = np.where(ticks_ms[:-1] > ticks_ms[1:])[0] + 1
         cumtv_rollovers = actl_rollovers_begin
-        # print(f'Num cumulative rllovrs at begin of wndw: {cumtv_rollovers}')
         if cumtv_rollovers != 0:
-            ticks = ticks + rollover_period * cumtv_rollovers
+            ticks_ms = ticks_ms + rollover_period * cumtv_rollovers
 
         for idx, rollover in np.ndenumerate(rollovers):
             if rollover == rollovers[-1]:
@@ -928,7 +882,7 @@ def extractrecords(
             else:
                 nxt_rollover = rollovers[idx[0] + 1]
             # print(rollover, nxt_rollover)
-            if (ticks[rollover + 1] - ticks[rollover]) != 0:
+            if (ticks_ms[rollover + 1] - ticks_ms[rollover]) != 0:
                 # Two consecutive identical tick counts indicates recording
                 # has stopped.
                 if nxt_rollover - rollover == 1:
@@ -937,11 +891,11 @@ def extractrecords(
                     # more than onerecord to reset to zero), then for first
                     # record after the rollover calc as the previous cumulative
                     # tick count plus a std record period.
-                    ticks[rollover] = ticks[rollover - 1] + logger["record_epoch"]
+                    ticks_ms[rollover] = ticks_ms[rollover - 1] + logger.record_epoch
                 elif (
                     abs(
-                        (ticks[rollover + 1] - ticks[rollover - 1])
-                        - 2 * logger["record_epoch"]
+                        (ticks_ms[rollover + 1] - ticks_ms[rollover - 1])
+                        - 2 * logger.record_epoch
                     )
                     < 2
                 ):
@@ -949,11 +903,11 @@ def extractrecords(
                     # indicated rollover are within 2ms of the expected time
                     # diff of 2 epochs, then the current single time tick is
                     # corrupt and not an actual rollover.
-                    ticks[rollover] = ticks[rollover - 1] + logger["record_epoch"]
+                    ticks_ms[rollover] = ticks_ms[rollover - 1] + logger.record_epoch
                 elif (
                     abs(
-                        (ticks[rollover] - ticks[rollover - 2])
-                        - 2 * logger["record_epoch"]
+                        (ticks_ms[rollover] - ticks_ms[rollover - 2])
+                        - 2 * logger.record_epoch
                     )
                     < 2
                 ):
@@ -961,15 +915,19 @@ def extractrecords(
                     # previous are within 2ms of the expected time diff of
                     # 2 epochs, then the previous single time tick is
                     # corrupt and not an actual rollover.
-                    ticks[rollover - 1] = ticks[rollover - 2] + logger["record_epoch"]
+                    ticks_ms[rollover - 1] = (
+                        ticks_ms[rollover - 2] + logger.record_epoch
+                    )
                 else:
                     cumtv_rollovers = cumtv_rollovers + 1
-                    ticks[rollover:nrecs_want] = (
-                        ticks[rollover:nrecs_want] + rollover_period
+                    ticks_ms[rollover:nrecs_want] = (
+                        ticks_ms[rollover:nrecs_want] + rollover_period
                     )
-                    rollover_dt = clk_start_dt + np.timedelta64(ticks[rollover], "ms")
+                    rollover_dt = clk_start_dt + np.timedelta64(
+                        ticks_ms[rollover], "ms"
+                    )
                     print(f"A time tick rollover occurred at " f"{rollover_dt}.")
-    records[:, last_field - logger["fmt_field"]["tic"]] = ticks
+    records[:, last_field - logger.fmt_field["tic"]] = ticks_ms
 
     return records
 
@@ -995,18 +953,18 @@ def clockdrift(
     if sync_tick_count is None:
         # Assign names to column numbers of raw data array.
         # Note that raw data array columns are reverse order to raw binary.
-        last_field = len(logger["rec_fmt"]) - 1
-        tick_col = last_field - logger["fmt_field"]["tic"]
-        pcore_col = last_field - logger["fmt_field"]["pcore"]
-        pn_col = last_field - logger["fmt_field"]["pn"]
+        last_field = len(logger.rec_fmt) - 1
+        tick_col = last_field - logger.fmt_field["tic"]
+        pcore_col = last_field - logger.fmt_field["pcore"]
+        pn_col = last_field - logger.fmt_field["pn"]
 
         # Window for identifying sync_tick_count is +/-5 minutes long.
         sync_wndw_ms = 5 * 60000
         # GPS sync time (gpssync_dt) is mid point of  window for sync.
         wndw_begin_ms = delta64_to_ms(gpssync_dt - clk_start_dt)
         wndw_begin_ms = wndw_begin_ms - sync_wndw_ms
-        rec_begin = int(wndw_begin_ms / logger["record_epoch"])
-        nrecs_want = int(sync_wndw_ms * 2 / logger["record_epoch"]) + 1
+        rec_begin = int(wndw_begin_ms / logger.record_epoch)
+        nrecs_want = int(sync_wndw_ms * 2 / logger.record_epoch) + 1
 
         sync_records = extractrecords(
             apg_filename, logger, nrecs_want, rec_begin, trbl_sht, clk_start_dt
@@ -1078,16 +1036,16 @@ def clockdrift(
 
         nonzero = np.where(pn != 0)[0]
         if nonzero.any():
-            i = logger["smpls_per_rec"] - nonzero.size
+            i = logger.smpls_per_rec - nonzero.size
         else:
-            i = logger["smpls_per_rec"]
+            i = logger.smpls_per_rec
 
-        sync_tick_count = sync_block[tick_col] + (i * logger["sample_epoch"])
+        sync_tick_count = sync_block[tick_col] + (i * logger.sample_epoch)
         sync_tick_count = int(sync_tick_count)
 
     else:
-        # Number of ticks until rollover and restart at zero.
-        tick_rollover = 2 ** logger["tic_bit_len"]  # 1 tick = 1 millisecond
+        # Number of ticks_ms until rollover and restart at zero.
+        tick_rollover = 2**logger.tic_bit_len  # 1 tick = 1 millisecond
         millisecs_logged = millisecs_logged % tick_rollover
 
     # APG logger clock offset relative to GPS time (positive = APG > GPS)

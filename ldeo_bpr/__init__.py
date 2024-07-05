@@ -9,6 +9,8 @@ from .constants import (
     STN_NAME_LEN,
     T_CHNL_CODE,
 )
+from .logger import Logger
+from .paros import Paros
 
 __all__ = [
     "NWK_NAME_LEN",
@@ -16,6 +18,8 @@ __all__ = [
     "PRESS_CONV_FCTR",
     "STN_NAME_LEN",
     "T_CHNL_CODE",
+    "Logger",
+    "Paros",
     "parse_arguments",
     "__version__",
 ]
