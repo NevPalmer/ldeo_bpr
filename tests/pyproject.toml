@@ -1,0 +1,35 @@
+# Development started by Neville Palmer, GNS Science on 2018/11/17.
+
+[project]
+name = "ldeo_bpr"
+dynamic = ["version", "readme"]
+requires-python = ">= 3.9"
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "obspy",
+    "scipy"
+]
+authors = [{name= "Neville Palmer", email = "n.palmer@gns.cri.nz"}]
+description = """\
+    A program for extracting raw data from BPR data loggers \
+    manufactured by Lamont Doherty Earth Observatory (LDEO), Columbia \
+    University.\
+    """
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+]
+keywords = ["bpr", "apg", "obp", "absolute pressure", "seafloor"]
+
+[tool.setuptools.dynamic]
+readme = {file = ["README.md"], content-type = "text/markdown"}
+version = {attr = "ldeo_bpr._version.__version__"}
+
+[project.optional-dependencies]
+tests = [
+    'pytest'
+]

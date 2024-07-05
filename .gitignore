@@ -1,8 +1,8 @@
 __pycache__
-_*
-*.code-workspace
 temp/
 logs/
 data/
 working/
-**/test*
+temp*
+working*
+unittest*

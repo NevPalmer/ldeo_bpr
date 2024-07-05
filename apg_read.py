@@ -1,11 +1,6 @@
 """A script for extracting raw data from LDEO type APG data loggers."""
-# Version 20230630
-# by Neville Palmer, GNS Science
-# 2018/11/17 Start development
 
-import argparse
 import datetime as dt
-import re
 import sys
 from configparser import ConfigParser
 from pathlib import Path
@@ -16,21 +11,14 @@ import obspy
 import scipy.signal as sig
 import scipy.stats as stat
 
-# miniSEED constants
-NWK_NAME_LEN = 2
-STN_NAME_LEN = 5
-P_CHNL_CODE = "HDH"
-T_CHNL_CODE = "BKO"
-
-# Pressure conversion factor from PSIA to Pascal.
-PRESS_CONV_FCTR = 6.894757293168e3
+import ldeo_bpr as bpr
 
 
 def main():
     """The first function run when this script is run directly."""
     # Dictionary of flags for turning on/off trouble shooting outputs.
     # Assign False or '' to disable.
-    trbl_sht = {
+    trbl_sht: dict[str, bool] = {
         # Save raw data as a text file of binary 1s & 0s. (Very slow)
         "binary_out": False,
         # Save raw data as a text file of hexadecimal values. (Very slow)
@@ -45,295 +33,54 @@ def main():
         "tic_sync": False,
     }
 
-    # Default values and choices for reading params from command line.
-    apg_ini = Path("./ParosAPG.ini")
-    logger_ini = Path("./APGlogger.ini")
-    logger_versions = ["CSAC2013", "Seascan2018", "TEST"]
-    clk_start = "2000-01-01_00:00:00"  # 'YYYY-MM-DD_hh:mm:ss'
-    bin_delta_ms = 0
-    out_filename = None
-    mseed_path = None
-    tmptr_smth_fctr = 1
-    decmt_intvl = 0
+    # Retrieve arguments from CLI.
+    args = bpr.parse_arguments()
 
-    # Read in parameters from command line
-    helpdesc = (
-        "Reads a raw APG data file and outputs decimated pressure data."
-        "Two .ini files are required which must contain configuration values "
-        "for the specific Paroscientific pressure transducer and the correct "
-        "version of APG logger board used."
-    )
-    parser = argparse.ArgumentParser(description=helpdesc)
-    parser.add_argument(
-        "-i",
-        "--infile",
-        help="Full path and filename of raw APG input file.",
-        required=True,
-    )
-    parser.add_argument(
-        "-a",
-        "--apgini",
-        help="Full path and filename for Paros APG "
-        f'configuration settings. Default: "{apg_ini}"',
-        default=apg_ini,
-    )
-    parser.add_argument(
-        "-s",
-        "--snapg",
-        help="Serial number of the Paroscientific APG used. "
-        "This must correspond to the serial number of an "
-        "entry in the apgini file.",
-        required=True,
-    )
-    parser.add_argument(
-        "-l",
-        "--loggerini",
-        help=f"Full path and filename for the APG logger "
-        f"board configuration settings. "
-        f'Default: "{logger_ini}"',
-        default=logger_ini,
-    )
-    parser.add_argument(
-        "-v",
-        "--version",
-        help="Specify the version/firmware of the APG logger " "board used.",
-        choices=logger_versions,
-        required=True,
-    )
-    parser.add_argument(
-        "-d",
-        "--decimate",
-        help=f"Required sample interval in seconds for "
-        f"pressure decimation. Zero for no decimation. "
-        f"Value must equal a single digit integer of seconds "
-        f"or minutes or a multiple of 5 or 10."
-        f'Default: "{decmt_intvl}"',
-        type=int,
-        default=decmt_intvl,
-    )
-    parser.add_argument(
-        "-t",
-        "--tempsmth",
-        help=f"Temperature smoothing factor (must be an odd "
-        f"integer). 5001 gives sensible smoothing. 50001 "
-        f"gives better smoothing for Seascan logger but is "
-        f'slow. Default: "{tmptr_smth_fctr}"',
-        type=int,
-        default=tmptr_smth_fctr,
-    )
-    parser.add_argument(
-        "-c",
-        "--clkstart",
-        help=f"Precise date and time when the logger clock "
-        f'was started. Format: "YYYY-MM-DDThh:mm:ss" '
-        f'Default: "{clk_start}"',
-        default=clk_start,
-    )
-    parser.add_argument(
-        "-b",
-        "--beginwndw",
-        help="Date and time to begin data extraction. "
-        "Assumes beginning of file if omitted. "
-        'Format: "YYYY-MM-DDThh:mm:ss.s"',
-    )
-    parser.add_argument(
-        "-e",
-        "--endwndw",
-        help="Date and time to end data extraction. Assumes "
-        "end of file if omitted. "
-        'Format: "YYYY-MM-DDThh:mm:ss.s"',
-    )
-    parser.add_argument(
-        "-B",
-        "--bininterval",
-        help="The Bin Interval defines the period of data "
-        "that will be processed at each iteration. Each bin "
-        "period processed will be appended to the output CSV "
-        "file if specified. If specified, multiple MiniSEED "
-        "files will be created, one for each Bin extracted."
-        'Format: "##[DHM]" where ## is an integer and '
-        "character D, H or M indicates Days, Hours or "
-        "Minutes.",
-    )
-    parser.add_argument(
-        "-g",
-        "--gpssynctime",
-        help="Precise date and time from GPS clock for "
-        "syncronising end time. No clock drift adjustment is "
-        'made if omitted. Format: "YYYY-DDD_hh:mm:ss"',
-    )
-    parser.add_argument(
-        "-y",
-        "--synctickcount",
-        help="The hexidecimal tick count that corresponds to "
-        "GPSSYNCTIME. If GPSSYNCTIME is specified and "
-        "SYNCTICKCOUNT is omitted, then it is assumed that an "
-        "artificial frequency was inserted precisely "
-        "at GPSSYNCTIME. This parameter is ignored if "
-        'GPSSYNCTIME is omitted. Format: "0xHHHHHHHHHH"',
-        type=lambda x: int(x, 0),
-    )
-    parser.add_argument(
-        "-w",
-        "--network",
-        help=(
-            f"Network name to be used in MiniSEED file header. Max "
-            f"{NWK_NAME_LEN} characters."
-        ),
-        default="",
-    )
-    parser.add_argument(
-        "-n",
-        "--station",
-        help=(
-            f"Station name to be used in MiniSEED file header. Max "
-            f"{STN_NAME_LEN} characters."
-        ),
-        default="",
-    )
-    parser.add_argument(
-        "-o",
-        "--outfile",
-        help="Full path and filename for output file. No file "
-        "will be generated if not specified.",
-        default=out_filename,
-    )
-    parser.add_argument(
-        "-m",
-        "--mseedpath",
-        help="Full path of location to save MiniSEED file(s). "
-        "No file(s) will be generated if not specified.",
-        default=mseed_path,
-    )
-    parser.add_argument(
-        "-f",
-        "--fmttime",
-        help="Specify the format to be used for presenting "
-        "time in outputs and plots, to be displayed as either "
-        "(s)econds or (d)ate-time.",
-        choices=["s", "d"],
-        default="s",
-    )
-    parser.add_argument(
-        "-p",
-        "--plot",
-        help="Generate and display a timeline plot. Either "
-        "display only the (f)inal smoothed/decimated result "
-        "or additionally dispaly the (r)aw data in the "
-        "background or (n)ot generate any plot at all. "
-        "Also specify whether to (s)ave as a file, (d)isplay to "
-        "the screen or output as (b)oth.",
-        choices=["n", "fs", "fd", "fb", "rs", "rd", "rb"],
-        default="n",
-    )
-    parser.add_argument(
-        "--noisefilt",
-        help="Apply a binned median to pressure & temperature data and remove"
-        "any data points that are greater than a predefined range from the"
-        "median values.",
-        action="store_true",
-        default=False,
-    )
-    args = parser.parse_args()
-
-    # Translate argparse parameters (except for window times).
-    apg_filename: Path = Path(args.infile)
-    apg_ini: Path = Path(args.apgini)
-    apg_sn = args.snapg.strip()
-    logger_ini: Path = Path(args.loggerini)
-    logger_version = args.version.strip()
-    decmt_intvl = args.decimate
-    tmptr_smth_fctr = args.tempsmth
-    noisefilt = args.noisefilt
-    clk_start = re.sub("[-: _/tT]", "_", args.clkstart)
-    clk_start_dt = dt.datetime.strptime(clk_start, "%Y_%m_%d_%H_%M_%S")
-    clk_start_dt = pydt_to_dt64(clk_start_dt)
     print("=" * 80)
-    print(f"STATS OF RAW FILE: {apg_filename}")
-    print(f"Time of first sample = {clk_start_dt}")
-    if args.bininterval:
-        bin_int = args.bininterval.strip().upper()
-        if bin_int[-1] == "D":
-            bin_delta = np.timedelta64(int(bin_int[0:-1]), "D")
-        elif bin_int[-1] == "H":
-            bin_delta = np.timedelta64(int(bin_int[0:-1]), "H")
-        elif bin_int[-1] == "M":
-            bin_delta = np.timedelta64(int(bin_int[0:-1]), "M")
-        else:
-            sys.exit(f'"{bin_int}" is not a valid format for -bininterval.')
-        bin_delta_ms = delta64_to_ms(bin_delta)
-
-    if args.gpssynctime:
-        gpssynctime = re.sub("[-: _/tT]", "_", args.gpssynctime)
-        gpssync_dt = dt.datetime.strptime(gpssynctime, "%Y_%j_%H_%M_%S")
-        gpssync_dt = pydt_to_dt64(gpssync_dt)
-    sync_tick_count = args.synctickcount
-    nwk_name = args.network.strip()
-    if nwk_name and len(nwk_name) > 2:
-        sys.exit(
-            f"The network name (--network), if specified, must be max. "
-            f"{NWK_NAME_LEN} charcters."
-        )
-    stn_name = args.station.strip()
-    if stn_name and len(nwk_name) > 2:
-        sys.exit(
-            f"The station name (--station), if specified, must be max. "
-            f"{STN_NAME_LEN} charcters."
-        )
-    if args.outfile:
-        out_filename = Path(args.outfile)
-    if args.mseedpath:
-        if not args.station or not args.network:
-            sys.exit(
-                "Both a station name (--station) and a network name (--network) "
-                "must be specified when generating a MiniSEED file."
-            )
-        mseed_path = Path(args.mseedpath)
-    time_format = args.fmttime.strip()
-    plot_flag = args.plot.strip()[:1]
-    plotout_flag = args.plot.strip()[1:]
+    print(f"STATS OF RAW FILE: {args.infile}")
+    print(f"Time of first sample = {args.clkstart}")
 
     # Read Paros transducer coefficients into a dict of lists from ini file.
     paros_coefs = ("U", "Y", "C", "D", "T")
     paros_cfg = ConfigParser()
-    paros_cfg.read(apg_ini)
+    paros_cfg.read(args.apgini)
     paros = {}
     for coef in paros_coefs:
-        paros[coef] = paros_cfg.get(apg_sn, coef).split(",")
+        paros[coef] = paros_cfg.get(args.snapg, coef).split(",")
         paros[coef] = [float(x) for x in paros[coef][::-1]]
     paros["Y"].append(0.0)
 
     # Read APG logger configuration parameters from ini file.
     logger_cfg = ConfigParser()
-    logger_cfg.read(logger_ini)
+    logger_cfg.read(args.loggerini)
     logger = {}
-    logger["head_len"] = logger_cfg.getint(logger_version, "head_len")
-    logger["rec_len"] = logger_cfg.getint(logger_version, "rec_len")
-    logger["smpls_per_rec"] = logger_cfg.getint(logger_version, "smpls_per_rec")
-    logger["sample_epoch"] = logger_cfg.getint(logger_version, "epoch")
+    logger["head_len"] = logger_cfg.getint(args.version, "head_len")
+    logger["rec_len"] = logger_cfg.getint(args.version, "rec_len")
+    logger["smpls_per_rec"] = logger_cfg.getint(args.version, "smpls_per_rec")
+    logger["sample_epoch"] = logger_cfg.getint(args.version, "epoch")
     logger["record_epoch"] = logger["sample_epoch"] * logger["smpls_per_rec"]
-    logger["clock_freq"] = logger_cfg.getint(logger_version, "clock_freq")
-    logger["TP_fctr"] = eval_exponent_str(logger_cfg.get(logger_version, "TP_fctr"))
-    logger["TP_cnst"] = logger_cfg.getfloat(logger_version, "TP_cnst")
-    logger["PP_fctr"] = eval_exponent_str(logger_cfg.get(logger_version, "PP_fctr"))
-    logger["PP_cnst"] = logger_cfg.getfloat(logger_version, "PP_cnst")
-    logger["timing"] = logger_cfg.get(logger_version, "timing")
+    logger["clock_freq"] = logger_cfg.getint(args.version, "clock_freq")
+    logger["TP_fctr"] = eval_exponent_str(logger_cfg.get(args.version, "TP_fctr"))
+    logger["TP_cnst"] = logger_cfg.getfloat(args.version, "TP_cnst")
+    logger["PP_fctr"] = eval_exponent_str(logger_cfg.get(args.version, "PP_fctr"))
+    logger["PP_cnst"] = logger_cfg.getfloat(args.version, "PP_cnst")
+    logger["timing"] = logger_cfg.get(args.version, "timing")
 
-    logger["rec_fmt"] = logger_cfg.get(logger_version, "rec_fmt").split(",")
+    logger["rec_fmt"] = logger_cfg.get(args.version, "rec_fmt").split(",")
     logger["rec_fmt"] = tuple([int(x) for x in logger["rec_fmt"]])
     fmt_field = {}
-    fmt_field["tic"] = logger_cfg.getint(logger_version, "tic_field")
-    fmt_field["tptr"] = logger_cfg.getint(logger_version, "temperature_field")
-    fmt_field["pcore"] = logger_cfg.getint(logger_version, "pcore_field")
-    fmt_field["pn"] = logger_cfg.getint(logger_version, "pn_field")
+    fmt_field["tic"] = logger_cfg.getint(args.version, "tic_field")
+    fmt_field["tptr"] = logger_cfg.getint(args.version, "temperature_field")
+    fmt_field["pcore"] = logger_cfg.getint(args.version, "pcore_field")
+    fmt_field["pn"] = logger_cfg.getint(args.version, "pn_field")
     if abs(fmt_field["pcore"] - fmt_field["pn"] + 1) != logger["smpls_per_rec"]:
         sys.exit(
             f"The number of samples per record "
-            f"({logger['smpls_per_rec'] }) for logger {logger_version}, "
+            f"({logger['smpls_per_rec'] }) for logger {args.version}, "
             f"does not match the number of Pcore and Pn fields in the "
             f"record format (Pcore through Pn inclusive = "
             f"{fmt_field['pcore']-fmt_field['pn']+1}), "
-            f"as provided in file {logger_ini}."
+            f"as provided in file {args.loggerini}."
         )
     rec_fmt_bits = int(sum(map(abs, logger["rec_fmt"])))
     if rec_fmt_bits != (logger["rec_len"] * 8):
@@ -341,16 +88,16 @@ def main():
             f"The total number of bits ({rec_fmt_bits}) given by the "
             f"record format {logger['rec_fmt'] } "
             f"does not equal the record length ({logger['rec_len'] } "
-            f"bytes x 8), as provided in the file {logger_ini}."
+            f"bytes x 8), as provided in the file {args.loggerini}."
         )
     logger["fmt_field"] = fmt_field
     logger["tic_bit_len"] = logger["rec_fmt"][fmt_field["tic"]]
 
     # Calculate duration and end time of raw file.
     try:
-        fsize = apg_filename.stat().st_size  # file size in bytes
+        fsize = args.infile.stat().st_size  # file size in bytes
     except FileNotFoundError:
-        sys.exit(f'Raw APG file "{apg_filename}" does not exist.')
+        sys.exit(f'Raw APG file "{args.infile}" does not exist.')
     print(f"Filesize = {fsize} bytes")
     nrecs = int((fsize - logger["head_len"]) / logger["rec_len"]) - 1
     print(f"Number of records = {nrecs:d}")
@@ -358,25 +105,17 @@ def main():
     file_duration_secs = file_duration_ms / 1000
     file_duration_days = file_duration_secs / 3600 / 24
     print(f"File duration = {file_duration_days} days")
-    clk_end_dt = clk_start_dt + np.timedelta64(file_duration_ms, "ms")
+    clk_end_dt = args.clkstart + np.timedelta64(file_duration_ms, "ms")
     print(f"Time of last sample = {clk_end_dt}")
     print("=" * 80)
     print("STATS OF DATA WINDOW TO BE EXTRACTED:")
 
     if args.beginwndw is None:
-        wndw_begin_dt = clk_start_dt
-    else:
-        wndw_begin = re.sub("[-: _/tT]", "_", args.beginwndw)
-        wndw_begin_dt = dt.datetime.strptime(wndw_begin, "%Y_%m_%d_%H_%M_%S.%f")
-        wndw_begin_dt = pydt_to_dt64(wndw_begin_dt)
+        args.beginwndw = args.clkstart
     if args.endwndw is None:
-        wndw_end_dt = clk_end_dt
-    else:
-        wndw_end = re.sub("[-: _/tT]", "_", args.endwndw)
-        wndw_end_dt = dt.datetime.strptime(wndw_end, "%Y_%m_%d_%H_%M_%S.%f")
-        wndw_end_dt = pydt_to_dt64(wndw_end_dt)
-    print(f"Window beginning: {wndw_begin_dt}")
-    wndw_len = wndw_end_dt - wndw_begin_dt
+        args.endwndw = clk_end_dt
+    print(f"Window beginning: {args.beginwndw}")
+    wndw_len = args.endwndw - args.beginwndw
     wndw_len_ms = delta64_to_ms(wndw_len)
     wndw_len_days = wndw_len_ms / (24 * 3600000)
     print(f"Window length (days): {wndw_len_days}")
@@ -384,7 +123,12 @@ def main():
     # Clock drift
     if args.gpssynctime is not None:
         drift = clockdrift(
-            apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count, trbl_sht
+            args.infile,
+            logger,
+            args.clkstart,
+            args.gpssynctime,
+            args.synctickcount,
+            trbl_sht,
         )
         print(
             f"Clock drift at end of recording (millisecs): {drift}\n"
@@ -392,7 +136,7 @@ def main():
         )
     else:
         drift = 0
-        gpssync_dt = clk_end_dt
+        args.gpssynctime = clk_end_dt
 
     print(
         f"NOTE: All times given above are Nominal. \n"
@@ -415,16 +159,16 @@ def main():
     print("STATS FOR EACH TIME BIN:")
 
     # Loop to extract data in time bins
-    if out_filename:
+    if args.outfile:
         # Create empty file, overwrite if exists.
-        open(out_filename, "w", encoding="utf8").close()
-    wndw_beg_unix_ms = dt64_to_ms(wndw_begin_dt)
-    wndw_end_unix_ms = dt64_to_ms(wndw_end_dt)
+        open(args.outfile, "w", encoding="utf8").close()
+    wndw_beg_unix_ms = dt64_to_ms(args.beginwndw)
+    wndw_end_unix_ms = dt64_to_ms(args.endwndw)
     bin_beg_ms = wndw_beg_unix_ms
-    if bin_delta_ms == 0:
+    if args.bininterval == 0:
         bin_end_ms = wndw_end_unix_ms
     else:
-        bin_end_ms = bin_beg_ms - (bin_beg_ms % bin_delta_ms) + bin_delta_ms
+        bin_end_ms = bin_beg_ms - (bin_beg_ms % args.bininterval) + args.bininterval
     while bin_beg_ms < wndw_end_unix_ms:
         if bin_end_ms > wndw_end_unix_ms:
             bin_end_ms = wndw_end_unix_ms
@@ -436,29 +180,28 @@ def main():
         generate_results(
             logger,
             paros,
-            nwk_name,
-            stn_name,
+            args.network,
+            args.station,
             fmt_field,
-            clk_start_dt,
+            args.clkstart,
             bin_begin_dt,
             bin_end_dt,
             file_duration_ms,
-            gpssync_dt,
+            args.gpssynctime,
             drift,
-            apg_filename,
-            decmt_intvl,
-            tmptr_smth_fctr,
-            noisefilt,
-            time_format,
-            plot_flag,
-            plotout_flag,
-            out_filename,
-            mseed_path,
+            args.infile,
+            args.decimate,
+            args.tempsmth,
+            args.noisefilt,
+            args.fmttime,
+            args.plot,
+            args.outfile,
+            args.mseedpath,
             trbl_sht,
         )
 
         bin_beg_ms = bin_end_ms
-        bin_end_ms = bin_beg_ms + bin_delta_ms
+        bin_end_ms = bin_beg_ms + args.bininterval
 
 
 ###############################################################################
@@ -479,8 +222,7 @@ def generate_results(
     tmptr_smth_fctr,
     noisefilt,
     time_format,
-    plot_flag,
-    plotout_flag,
+    plot_flags,
     out_filename: Path,
     mseed_path: Path,
     trbl_sht,
@@ -731,7 +473,7 @@ def generate_results(
 
     facts = 1 - (T0**2) / (PP**2)
     pressure = Cv * facts * (1 - Dv * facts)  # pressure in PSIA
-    pressure = pressure * PRESS_CONV_FCTR  # Convert pressure units
+    pressure = pressure * bpr.PRESS_CONV_FCTR  # Convert pressure units
     pressure_raw = pressure
 
     if noisefilt:
@@ -898,7 +640,7 @@ def generate_results(
 
         dt_text = bin_begin.strftime("%Y-%m-%dT%H-%M-%Sz")
 
-        stats["channel"] = P_CHNL_CODE
+        stats["channel"] = bpr.P_CHNL_CODE
         stats["sampling_rate"] = 1000 / logger["sample_epoch"]
         trace_p = obspy.Trace(data=pressure_mseed, header=stats)
         stream_p = obspy.Stream(traces=[trace_p])
@@ -907,7 +649,7 @@ def generate_results(
         print(f'Writing pressure data to MiniSEED file "{mseed_filename}".')
         stream_p.write(mseed_filename, format="MSEED")
 
-        stats["channel"] = T_CHNL_CODE
+        stats["channel"] = bpr.T_CHNL_CODE
         stats["sampling_rate"] = 1000 / logger["record_epoch"]
         trace_t = obspy.Trace(data=temperature_mseed, header=stats)
         stream_t = obspy.Stream(traces=[trace_t])
@@ -921,7 +663,7 @@ def generate_results(
         # stream_p.plot()
 
     # Generate and output a plot
-    if plot_flag != "n":
+    if plot_flags["format"] != "n":
         # Set min-max values for plot Y-axes
         print("Generating plot.", flush=True)
         p_min = np.min(pressure_out)
@@ -967,7 +709,7 @@ def generate_results(
         plt.ylim(p_min, p_max)
 
         # Plot raw pressure values if requested
-        if plot_flag == "r":
+        if plot_flags["format"] == "r":
             if time_format == "d":
                 time_p = clk_start_dt + ms_to_delta64(millisecs_p)
             else:
@@ -982,7 +724,7 @@ def generate_results(
             )
 
         # Plot raw temperature values if requested
-        if plot_flag == "r":
+        if plot_flags["format"] == "r":
             if time_format == "d":
                 time_t = clk_start_dt + ms_to_delta64(millisecs_t)
             else:
@@ -1031,10 +773,10 @@ def generate_results(
         if time_format == "d":
             # Rotates and aligns the X-axis labels.
             plt.gcf().autofmt_xdate(bottom=0.2, rotation=30, ha="right")
-        if plotout_flag in ["s", "b"]:
+        if plot_flags["output"] in ["s", "b"]:
             basename = apg_filename.stem
             fig.savefig(f"./{basename}.png", dpi=200)
-        if plotout_flag in ["d", "b"]:
+        if plot_flags["output"] in ["d", "b"]:
             plt.show()
         plt.close(fig)
 
@@ -1389,17 +1131,17 @@ def remove_noise_meddiff(
 def dt64_to_pydt(dt64):
     """Convert a numpy datetime64 to a py datetime."""
     seconds_since_epoch = dt64_to_ms(dt64) / 1000
-    return dt.datetime.utcfromtimestamp(seconds_since_epoch)
+    return dt.datetime.fromtimestamp(seconds_since_epoch, tz=dt.timezone.utc)
 
 
 def pydt_to_dt64(pydt):
     """Convert a py datetime to a numpy datetime64."""
-    return np.datetime64(pydt)
+    return np.datetime64(pydt).astype("int64")
 
 
 def delta64_to_ms(delta64):
     """Convert a numpy timedelta64 to milliseconds."""
-    return int(delta64.astype("timedelta64[ms]").astype("int64"))
+    return delta64.astype("timedelta64[ms]").astype("int64")
 
 
 def ms_to_delta64(msec):
@@ -1408,16 +1150,13 @@ def ms_to_delta64(msec):
 
 
 def dt64_to_ms(dt64):
-    """Convert a numpy datetime64 to milliseconds.
-
-    Returns an int64.
-    """
-    return int(dt64.astype("datetime64[ms]").astype("int64"))
+    """Convert a numpy datetime64 to milliseconds."""
+    return dt64.astype("datetime64[ms]").astype("int64")
 
 
 def ms_to_dt64(msec):
     """Convert milliseconds to a numpy datetime64."""
-    return np.datetime64(msec, "ms")
+    return np.datetime64(int(msec), "ms")
 
 
 ###############################################################################
