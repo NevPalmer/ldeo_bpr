@@ -1,6 +1,5 @@
 """A script for extracting raw data from LDEO type APG data loggers."""
 
-import datetime as dt
 import sys
 from pathlib import Path
 
@@ -11,6 +10,7 @@ import scipy.signal as sig
 import scipy.stats as stat
 
 import ldeo_bpr as bpr
+from ldeo_bpr import dt64_utils
 
 
 def main():
@@ -71,7 +71,7 @@ def main():
         args.endwndw = clk_end_dt
     print(f"Window beginning: {args.beginwndw}")
     wndw_len = args.endwndw - args.beginwndw
-    wndw_len_ms = delta64_to_ms(wndw_len)
+    wndw_len_ms = dt64_utils.delta64_to_ms(wndw_len)
     wndw_len_days = wndw_len_ms / (24 * 3600000)
     print(f"Window length (days): {wndw_len_days}")
 
@@ -117,8 +117,8 @@ def main():
     if args.outfile:
         # Create empty file, overwrite if exists.
         open(args.outfile, "w", encoding="utf8").close()
-    wndw_beg_unix_ms = dt64_to_ms(args.beginwndw)
-    wndw_end_unix_ms = dt64_to_ms(args.endwndw)
+    wndw_beg_unix_ms = dt64_utils.dt64_to_ms(args.beginwndw)
+    wndw_end_unix_ms = dt64_utils.dt64_to_ms(args.endwndw)
     bin_beg_ms = wndw_beg_unix_ms
     if args.bininterval == 0:
         bin_end_ms = wndw_end_unix_ms
@@ -127,8 +127,8 @@ def main():
     while bin_beg_ms < wndw_end_unix_ms:
         if bin_end_ms > wndw_end_unix_ms:
             bin_end_ms = wndw_end_unix_ms
-        bin_begin_dt = ms_to_dt64(bin_beg_ms)
-        bin_end_dt = ms_to_dt64(bin_end_ms)
+        bin_begin_dt = dt64_utils.ms_to_dt64(bin_beg_ms)
+        bin_end_dt = dt64_utils.ms_to_dt64(bin_end_ms)
         print("-" * 80)
         print(f"Processing time bin: start: {bin_begin_dt} | end: {bin_end_dt}")
 
@@ -189,8 +189,8 @@ def generate_results(
         # bin_padding = 0
         # bin_padding = 600000  # milliseconds
 
-    bin_begin_ms = delta64_to_ms(bin_begin_dt - clk_start_dt)
-    bin_len_ms = delta64_to_ms(bin_end_dt - bin_begin_dt)
+    bin_begin_ms = dt64_utils.delta64_to_ms(bin_begin_dt - clk_start_dt)
+    bin_len_ms = dt64_utils.delta64_to_ms(bin_end_dt - bin_begin_dt)
     bin_end_ms = bin_begin_ms + bin_len_ms
 
     # Make sure the requested times don't fall outside available records.
@@ -336,7 +336,7 @@ def generate_results(
     # Apply clock drift to time values
     # Clock drift is fixed at the mid-point of the period of extracted data
     # and any change is assumed to be insignificant over that period.
-    millisecs_logged = delta64_to_ms(gpssync_dt - clk_start_dt)
+    millisecs_logged = dt64_utils.delta64_to_ms(gpssync_dt - clk_start_dt)
     drift_beg = drift * (millisecs_t[0] / millisecs_logged)
     drift_end = drift * (millisecs_t[-1] / millisecs_logged)
     drift_applied = (drift_beg + drift_end) / 2
@@ -560,7 +560,7 @@ def generate_results(
     # Convert timestamp from seconds to datetime if specified.
     if time_format == "d":
         print("Calculating a timestamp array from the milliseconds array.", flush=True)
-        time = (clk_start_dt + ms_to_delta64(time)).astype("datetime64[ms]")
+        time = (clk_start_dt + dt64_utils.ms_to_delta64(time)).astype("datetime64[ms]")
         xlabel = "Date-Time"
     else:
         time = time / 1000
@@ -584,7 +584,7 @@ def generate_results(
         pressure_mseed = pressure[mask]
         mask = np.logical_and(millisecs_t >= bin_begin_ms, millisecs_t < bin_end_ms)
         temperature_mseed = temperature_raw[mask]
-        bin_begin = dt64_to_pydt(bin_begin_dt)
+        bin_begin = dt64_utils.dt64_to_pydt(bin_begin_dt)
         stats = {
             "network": nwk_name,
             "station": stn_name,
@@ -668,7 +668,7 @@ def generate_results(
         # Plot raw pressure values if requested
         if plot_flags["format"] == "r":
             if time_format == "d":
-                time_p = clk_start_dt + ms_to_delta64(millisecs_p)
+                time_p = clk_start_dt + dt64_utils.ms_to_delta64(millisecs_p)
             else:
                 time_p = millisecs_p / 1000
             ax1.plot(
@@ -683,7 +683,7 @@ def generate_results(
         # Plot raw temperature values if requested
         if plot_flags["format"] == "r":
             if time_format == "d":
-                time_t = clk_start_dt + ms_to_delta64(millisecs_t)
+                time_t = clk_start_dt + dt64_utils.ms_to_delta64(millisecs_t)
             else:
                 time_t = millisecs_t / 1000
             ax2.plot(
@@ -948,7 +948,7 @@ def clockdrift(
     count when this frequency starts is detected in the data and this value
     is used in place of sync_tick_count.
     """
-    millisecs_logged = delta64_to_ms(gpssync_dt - clk_start_dt)
+    millisecs_logged = dt64_utils.delta64_to_ms(gpssync_dt - clk_start_dt)
 
     if sync_tick_count is None:
         # Assign names to column numbers of raw data array.
@@ -961,7 +961,7 @@ def clockdrift(
         # Window for identifying sync_tick_count is +/-5 minutes long.
         sync_wndw_ms = 5 * 60000
         # GPS sync time (gpssync_dt) is mid point of  window for sync.
-        wndw_begin_ms = delta64_to_ms(gpssync_dt - clk_start_dt)
+        wndw_begin_ms = dt64_utils.delta64_to_ms(gpssync_dt - clk_start_dt)
         wndw_begin_ms = wndw_begin_ms - sync_wndw_ms
         rec_begin = int(wndw_begin_ms / logger.record_epoch)
         nrecs_want = int(sync_wndw_ms * 2 / logger.record_epoch) + 1
@@ -1082,58 +1082,6 @@ def remove_noise_meddiff(
     millisecs = np.delete(millisecs, mask)
     return raw_data, millisecs
     # return np.interp(millisecs_all, millisecs, raw_data)
-
-
-###############################################################################
-# The following are conversions to and from numpy datetime64 & timedelta64
-def dt64_to_pydt(dt64):
-    """Convert a numpy datetime64 to a py datetime."""
-    seconds_since_epoch = dt64_to_ms(dt64) / 1000
-    return dt.datetime.fromtimestamp(seconds_since_epoch, tz=dt.timezone.utc)
-
-
-def pydt_to_dt64(pydt):
-    """Convert a py datetime to a numpy datetime64."""
-    return np.datetime64(pydt).astype("int64")
-
-
-def delta64_to_ms(delta64):
-    """Convert a numpy timedelta64 to milliseconds."""
-    return delta64.astype("timedelta64[ms]").astype("int64")
-
-
-def ms_to_delta64(msec):
-    """Convert numpy array of milliseconds to timedelta64."""
-    return msec.astype("timedelta64[ms]")
-
-
-def dt64_to_ms(dt64):
-    """Convert a numpy datetime64 to milliseconds."""
-    return dt64.astype("datetime64[ms]").astype("int64")
-
-
-def ms_to_dt64(msec):
-    """Convert milliseconds to a numpy datetime64."""
-    return np.datetime64(int(msec), "ms")
-
-
-###############################################################################
-# Miscellaneous utility functions.
-def eval_exponent_str(exp_str: str) -> int:
-    """Convert a string in the form "X**Y" to an int.
-
-    Will also accept a pure integer string ("X") as input.
-    """
-    try:
-        return int(exp_str)
-    except ValueError:
-        base, exponent = exp_str.split("**", 1)
-        try:
-            return int(base) ** int(exponent)
-        except ValueError as err:
-            raise ValueError(
-                f"'{exp_str}' is not a valid exponent string to be evaluated."
-            ) from err
 
 
 ###############################################################################

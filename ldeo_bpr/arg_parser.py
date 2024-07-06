@@ -1,6 +1,5 @@
 """Module to parse arguments from command line."""
 
-import datetime as dt
 import re
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
@@ -8,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 import ldeo_bpr as bpr
+from ldeo_bpr import dt64_utils
 
 
 def parse_arguments(args=None) -> Namespace:
@@ -109,7 +109,7 @@ def parse_arguments(args=None) -> Namespace:
         help=f"Precise date and time when the logger clock "
         f'was started. Format: "YYYY-MM-DDThh:mm:ss" '
         f'Default: "{clk_start}"',
-        type=dtstr_to_dt64,
+        type=dt64_utils.dtstr_to_dt64,
         default=clk_start,
     )
     parser.add_argument(
@@ -118,7 +118,7 @@ def parse_arguments(args=None) -> Namespace:
         help="Date and time to begin data extraction. "
         "Assumes beginning of file if omitted. "
         'Format: "YYYY-MM-DDThh:mm:ss.s"',
-        type=dtstr_to_dt64,
+        type=dt64_utils.dtstr_to_dt64,
     )
     parser.add_argument(
         "-e",
@@ -126,7 +126,7 @@ def parse_arguments(args=None) -> Namespace:
         help="Date and time to end data extraction. Assumes "
         "end of file if omitted. "
         'Format: "YYYY-MM-DDThh:mm:ss.s"',
-        type=dtstr_to_dt64,
+        type=dt64_utils.dtstr_to_dt64,
     )
     parser.add_argument(
         "-B",
@@ -139,7 +139,7 @@ def parse_arguments(args=None) -> Namespace:
         'Format: "##[DHM]" where ## is an integer and '
         "character D, H or M indicates Days, Hours or "
         "Minutes.",
-        type=intvlstr_to_dt64,
+        type=dt64_utils.intvlstr_to_dt64,
         default=np.timedelta64(0, "ms"),
     )
     parser.add_argument(
@@ -148,7 +148,7 @@ def parse_arguments(args=None) -> Namespace:
         help="Precise date and time from GPS clock for "
         "syncronising end time. No clock drift adjustment is "
         'made if omitted. Format: "YYYY-DDD_hh:mm:ss"',
-        type=dtstr_to_dt64,
+        type=dt64_utils.dtstr_to_dt64,
     )
     parser.add_argument(
         "-y",
@@ -237,41 +237,6 @@ def parse_arguments(args=None) -> Namespace:
             "-m/--mseedpath was specified."
         )
     return args
-
-
-def dtstr_to_dt64(datetime_str: str) -> np.datetime64:
-    """Convert a formatted string to a Numpy datetime64."""
-    # Standardise the delimiters
-    standardised_str = re.sub("[-: _/tT]", "_", datetime_str)
-    match1 = re.match(r"^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$", standardised_str)
-    match2 = re.match(r"^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}\.\d+$", standardised_str)
-    match3 = re.match(r"^\d{4}_\d{3}_\d{2}_\d{2}_\d{2}$", standardised_str)
-    if match1:
-        pydt = dt.datetime.strptime(standardised_str, "%Y_%m_%d_%H_%M_%S")
-    elif match2:
-        pydt = dt.datetime.strptime(standardised_str, "%Y_%m_%d_%H_%M_%S.%f")
-    elif match3:
-        pydt = dt.datetime.strptime(standardised_str, "%Y_%j_%H_%M_%S")
-    else:
-        raise ValueError(f"'{datetime_str}' is not a valid datetime string.")
-    return np.datetime64(pydt).astype("datetime64[ms]")
-
-
-def intvlstr_to_dt64(intvl_str: str) -> np.timedelta64:
-    """Convert a time interval string to a Numpy timedelta64.
-
-    Format of string is "##[DHM]". Where ## is an integer and character
-    D, H or M indicates Days, Hours or Minutes.
-    """
-    match = re.match(r"^(\d+)([DHMdhm])$", intvl_str)
-    if match:
-        value = int(match.group(1))
-        unit = match.group(2).lower()
-        if unit == "d":
-            unit = "D"
-        return np.timedelta64(value, unit).astype("timedelta64[ms]")
-    else:
-        raise ValueError(f"'{intvl_str}' is not a valid time interval string.")
 
 
 def nwk_name(nwk_str: str) -> str:
