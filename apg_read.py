@@ -15,29 +15,8 @@ from ldeo_bpr import dt64_utils
 
 def main():
     """The first function run when this script is run directly."""
-    # Dictionary of flags for turning on/off trouble shooting outputs.
-    # Assign False or '' to disable.
-    trbl_sht: dict[str, bool] = {
-        # Save raw data as a text file of binary 1s & 0s. (Very slow)
-        "binary_out": False,
-        # Save raw data as a text file of hexadecimal values. (Very slow)
-        "hex_out": False,
-        # Save raw records to file as integers without tick rollover removed.
-        "raw_rlovr": False,
-        # Save raw records to file as integers with tick rollover removed.
-        "raw_no_rlovr": False,
-        # Save time sync records to file as integers with tick rollover remved.
-        "raw_sync": False,
-        # Write a summary file showing syncronised tic counts and exit.
-        "tic_sync": False,
-    }
-
     # Retrieve CLI parameters.
     args = bpr.parse_arguments()
-
-    print("=" * 80)
-    print(f"STATS OF RAW FILE: {args.infile}")
-    print(f"Time of first sample = {args.clkstart}")
 
     # Read Paros transducer coefficients from .ini file.
     paros = bpr.Paros.from_file(filename=args.apgini, paros_sn=args.snapg)
@@ -48,50 +27,45 @@ def main():
         logger_version=args.loggerversion,
     )
 
-    # Calculate duration and end time of raw file.
-    try:
-        fsize = args.infile.stat().st_size  # file size in bytes
-    except FileNotFoundError:
-        sys.exit(f'Raw APG file "{args.infile}" does not exist.')
-    print(f"Filesize = {fsize} bytes")
-    nrecs = int((fsize - logger.head_len) / logger.rec_len) - 1
-    print(f"Number of records = {nrecs:d}")
-    file_duration_ms = nrecs * logger.record_epoch
-    file_duration_secs = file_duration_ms / 1000
-    file_duration_days = file_duration_secs / 3600 / 24
+    # Create a BPR raw data file object.
+    raw_file = bpr.RawFile(
+        filename=args.infile,
+        logger=logger,
+        start_clk=args.clkstart,
+        gpssync_dt=args.gpssynctime,
+        sync_tick_count=args.synctickcount,
+    )
+
+    print("=" * 80)
+    print(f"STATS OF RAW FILE: {raw_file.filename}")
+    print(f"Time of first sample = {raw_file.start_clk}")
+    print(f"Time of last sample = {raw_file.end_clk}")
+    file_duration_days = raw_file.file_duration_ms / (24 * 3600000)
     print(f"File duration = {file_duration_days} days")
-    clk_end_dt = args.clkstart + np.timedelta64(file_duration_ms, "ms")
-    print(f"Time of last sample = {clk_end_dt}")
+    print(f"Filesize = {raw_file.filesize_b} bytes")
+    print(f"Number of records = {raw_file.num_rcrds:d}")
+    if raw_file.clockdrift_ms is None:
+        print(
+            "No clock drift has been calculated or applied.\n"
+            "   Insufficient parameters supplied."
+        )
+    else:
+        print(
+            f"Clock drift at end of recording (millisecs): {raw_file.clockdrift_ms}\n"
+            f"   (logged time - actual GPS time)"
+        )
+
     print("=" * 80)
     print("STATS OF DATA WINDOW TO BE EXTRACTED:")
-
     if args.beginwndw is None:
-        args.beginwndw = args.clkstart
+        args.beginwndw = raw_file.start_clk
     if args.endwndw is None:
-        args.endwndw = clk_end_dt
+        args.endwndw = raw_file.end_clk
     print(f"Window beginning: {args.beginwndw}")
     wndw_len = args.endwndw - args.beginwndw
     wndw_len_ms = dt64_utils.delta64_to_ms(wndw_len)
     wndw_len_days = wndw_len_ms / (24 * 3600000)
     print(f"Window length (days): {wndw_len_days}")
-
-    # Clock drift
-    if args.gpssynctime is not None:
-        drift = clockdrift(
-            args.infile,
-            logger,
-            args.clkstart,
-            args.gpssynctime,
-            args.synctickcount,
-            trbl_sht,
-        )
-        print(
-            f"Clock drift at end of recording (millisecs): {drift}\n"
-            f"   (logged time - actual GPS time)"
-        )
-    else:
-        drift = 0
-        args.gpssynctime = clk_end_dt
 
     print(
         f"NOTE: All times given above are Nominal. \n"
@@ -135,15 +109,11 @@ def main():
         generate_results(
             logger,
             paros,
+            raw_file,
             args.network,
             args.station,
-            args.clkstart,
             bin_begin_dt,
             bin_end_dt,
-            file_duration_ms,
-            args.gpssynctime,
-            drift,
-            args.infile,
             args.decimate,
             args.tempsmth,
             args.noisefilt,
@@ -151,7 +121,6 @@ def main():
             args.plot,
             args.outfile,
             args.mseedpath,
-            trbl_sht,
         )
 
         bin_beg_ms = bin_end_ms
@@ -162,15 +131,11 @@ def main():
 def generate_results(
     logger: bpr.Logger,
     paros: bpr.Paros,
+    raw_file: bpr.RawFile,
     nwk_name,
     stn_name,
-    clk_start_dt,
     bin_begin_dt,
     bin_end_dt,
-    file_duration_ms,
-    gpssync_dt,
-    drift,
-    apg_filename: Path,
     decmt_intvl,
     tmptr_smth_fctr,
     noisefilt,
@@ -178,7 +143,6 @@ def generate_results(
     plot_flags,
     out_filename: Path,
     mseed_path: Path,
-    trbl_sht: dict[str, bool],
 ):
     """This is the primary function used to extract and output results."""
     # Calculate window for extracting data.
@@ -186,10 +150,8 @@ def generate_results(
         bin_padding = 1_000_000  # milliseconds
     else:
         bin_padding = (tmptr_smth_fctr - 1) * logger.smpls_per_rec * 10
-        # bin_padding = 0
-        # bin_padding = 600000  # milliseconds
 
-    bin_begin_ms = dt64_utils.delta64_to_ms(bin_begin_dt - clk_start_dt)
+    bin_begin_ms = dt64_utils.delta64_to_ms(bin_begin_dt - raw_file.start_clk)
     bin_len_ms = dt64_utils.delta64_to_ms(bin_end_dt - bin_begin_dt)
     bin_end_ms = bin_begin_ms + bin_len_ms
 
@@ -200,22 +162,26 @@ def generate_results(
         padded_bin_begin_ms = bin_begin_ms - bin_padding
 
     padded_bin_len_ms = bin_end_ms - padded_bin_begin_ms + bin_padding
-    avail_bin_len_ms = file_duration_ms - bin_begin_ms
+    avail_bin_len_ms = raw_file.file_duration_ms - bin_begin_ms
     if (avail_bin_len_ms - padded_bin_len_ms) <= 0:
         padded_bin_len_ms = padded_bin_len_ms - bin_padding
 
-    rec_begin = int(padded_bin_begin_ms / logger.record_epoch)
-    nrecs_want = int(padded_bin_len_ms / logger.record_epoch) + 1
+    start_rcrd = int(padded_bin_begin_ms / logger.record_epoch)
+    num_rcrds_wanted = int(padded_bin_len_ms / logger.record_epoch) + 1
 
     # Extract records from APG file for the time window specified.
     print("Extracting raw records:\n", end="")
 
-    records = extractrecords(
-        apg_filename, logger, nrecs_want, rec_begin, trbl_sht, clk_start_dt
+    records = bpr.extract_records(
+        raw_file.filename,
+        raw_file.start_clk,
+        logger,
+        start_rcrd,
+        num_rcrds_wanted,
     )
 
     # Save raw records to file as integers with tick rollover removed.
-    if trbl_sht["raw_no_rlovr"]:
+    if bpr.TROUBLE_SHOOT["raw_no_rlovr"]:
         np.savetxt(
             "raw_records_no-rollover.txt", records, fmt="%d", header="", comments=""
         )
@@ -233,31 +199,31 @@ def generate_results(
     else:
         press_raw = records[:, pcore_col : pn_col - 1 : -1]
     press_raw = np.cumsum(press_raw, axis=1)
-    press_raw = press_raw.reshape(nrecs_want * logger.smpls_per_rec)
+    press_raw = press_raw.reshape(num_rcrds_wanted * logger.smpls_per_rec)
     temp_raw = records[:, tptr_col]
     ticks_ms = records[:, last_field - logger.fmt_field["tic"]]
 
     actual_end_tick = ticks_ms[-1]
     actual_begin_tick = ticks_ms[0]
-    nominal_begin_tick = rec_begin * logger.record_epoch
-    nominal_end_tick = (rec_begin + nrecs_want - 1) * logger.record_epoch
+    nominal_begin_tick = start_rcrd * logger.record_epoch
+    nominal_end_tick = (start_rcrd + num_rcrds_wanted - 1) * logger.record_epoch
     # print(f"\nActual beginning tick:  {actual_begin_tick}")
     # print(f"Nominal beginning tick: {nominal_begin_tick}")
     # print(f"Actual end tick:        {actual_end_tick}")
     # print(f"Nominal end tick:       {nominal_end_tick}\n")
 
     nom_ticks_t = np.linspace(
-        nominal_begin_tick, nominal_end_tick, num=nrecs_want, endpoint=True
+        nominal_begin_tick, nominal_end_tick, num=num_rcrds_wanted, endpoint=True
     ).astype("int64")
     nom_ticks_p = np.linspace(
         nominal_begin_tick,
         nominal_end_tick + logger.record_epoch,
-        num=nrecs_want * logger.smpls_per_rec,
+        num=num_rcrds_wanted * logger.smpls_per_rec,
         endpoint=False,
     ).astype("int64")
 
     # Write a summary file showing syncronised tic counts and exit.
-    if trbl_sht["tic_sync"]:
+    if bpr.TROUBLE_SHOOT["tic_sync"]:
         time_diff = ticks_ms - nom_ticks_t
         ticks_ms = np.column_stack((ticks_ms, nom_ticks_t, time_diff))
         summary_ticks_ms = [ticks_ms[0]]
@@ -336,9 +302,13 @@ def generate_results(
     # Apply clock drift to time values
     # Clock drift is fixed at the mid-point of the period of extracted data
     # and any change is assumed to be insignificant over that period.
-    millisecs_logged = dt64_utils.delta64_to_ms(gpssync_dt - clk_start_dt)
-    drift_beg = drift * (millisecs_t[0] / millisecs_logged)
-    drift_end = drift * (millisecs_t[-1] / millisecs_logged)
+    millisecs_logged = dt64_utils.delta64_to_ms(
+        raw_file.gpssync_dt - raw_file.start_clk
+    )
+    if raw_file.clockdrift_ms is None:
+        raw_file.clockdrift_ms = 0
+    drift_beg = raw_file.clockdrift_ms * (millisecs_t[0] / millisecs_logged)
+    drift_end = raw_file.clockdrift_ms * (millisecs_t[-1] / millisecs_logged)
     drift_applied = (drift_beg + drift_end) / 2
     # Round the drift to be applied to the  nearest whole sample epoch.
     drift_applied = int(
@@ -560,7 +530,9 @@ def generate_results(
     # Convert timestamp from seconds to datetime if specified.
     if time_format == "d":
         print("Calculating a timestamp array from the milliseconds array.", flush=True)
-        time = (clk_start_dt + dt64_utils.ms_to_delta64(time)).astype("datetime64[ms]")
+        time = (raw_file.start_clk + dt64_utils.ms_to_delta64(time)).astype(
+            "datetime64[ms]"
+        )
         xlabel = "Date-Time"
     else:
         time = time / 1000
@@ -668,7 +640,7 @@ def generate_results(
         # Plot raw pressure values if requested
         if plot_flags["format"] == "r":
             if time_format == "d":
-                time_p = clk_start_dt + dt64_utils.ms_to_delta64(millisecs_p)
+                time_p = raw_file.start_clk + dt64_utils.ms_to_delta64(millisecs_p)
             else:
                 time_p = millisecs_p / 1000
             ax1.plot(
@@ -683,7 +655,7 @@ def generate_results(
         # Plot raw temperature values if requested
         if plot_flags["format"] == "r":
             if time_format == "d":
-                time_t = clk_start_dt + dt64_utils.ms_to_delta64(millisecs_t)
+                time_t = raw_file.start_clk + dt64_utils.ms_to_delta64(millisecs_t)
             else:
                 time_t = millisecs_t / 1000
             ax2.plot(
@@ -725,13 +697,15 @@ def generate_results(
             linewidth=0.5,
         )
 
-        fig.suptitle(f"{apg_filename}\nBegin: {bin_begin_dt}  -  " f"End: {bin_end_dt}")
+        fig.suptitle(
+            f"{raw_file.filename}\nBegin: {bin_begin_dt}  -  " f"End: {bin_end_dt}"
+        )
         plt.tight_layout()
         if time_format == "d":
             # Rotates and aligns the X-axis labels.
             plt.gcf().autofmt_xdate(bottom=0.2, rotation=30, ha="right")
         if plot_flags["output"] in ["s", "b"]:
-            basename = apg_filename.stem
+            basename = raw_file.filename.stem
             fig.savefig(f"./{basename}.png", dpi=200)
         if plot_flags["output"] in ["d", "b"]:
             plt.show()
@@ -740,320 +714,7 @@ def generate_results(
     return
 
 
-###########################################################################
-def extractrecords(
-    apg_filename: Path,
-    logger: bpr.Logger,
-    nrecs_want: int,
-    rec_begin: int,
-    trbl_sht: dict[str, bool],
-    clk_start_dt: np.datetime64,
-):
-    """Extracts binary records from a raw APG data logger file."""
-    if trbl_sht["binary_out"]:
-        binary_filename = "raw_binary.txt"
-        # Create empty file, overwrite if exists.
-        open(binary_filename, "w", encoding="utf8").close()
-    if trbl_sht["hex_out"]:
-        hex_filename = "raw_hex.txt"
-        # Create empty file, overwrite if exists.
-        open(hex_filename, "w", encoding="utf8").close()
-
-    with open(apg_filename, "rb") as apgfile:
-        begin_byte = logger.head_len + rec_begin * logger.rec_len
-        apgfile.seek(begin_byte, 0)
-        records = []
-        for i in range(0, nrecs_want):
-            binary_record = apgfile.read(logger.rec_len)
-
-            # Print record as a string of Binary values to file.
-            if trbl_sht["binary_out"]:
-                bin_str = ""
-                for ch in binary_record:
-                    bin_str += f"{ch:08b}"
-                cum_rec_fmt = np.cumsum(list(map(abs, logger.rec_fmt)))
-                bin_str_dlmtd = ""
-                for count, char in enumerate(bin_str):
-                    if count in cum_rec_fmt:
-                        bin_str_dlmtd = bin_str_dlmtd + " "
-                    bin_str_dlmtd = bin_str_dlmtd + char
-                with open(binary_filename, "a", encoding="utf8") as binfile:
-                    binfile.write(f"{bin_str_dlmtd}\n")
-
-            # Write record as a string of Hexadecimal values to file.
-            if trbl_sht["hex_out"]:
-                hex_str = ""
-                for ch in binary_record:
-                    hex_str += hex(ch) + " "
-                with open(hex_filename, "a", encoding="utf8") as hexfile:
-                    hexfile.write(f"{hex_str}\n")
-
-            # Split record into array of ints defined as groups of bits
-            # by logger['rec_fmt'] .
-            record_int = int.from_bytes(binary_record, byteorder="big", signed=False)
-            record = []
-            for signed_bit_len in reversed(logger.rec_fmt):
-                bit_len = int(abs(signed_bit_len))
-                # Read right most bit_len bits
-                field = record_int & (2**bit_len - 1)
-                # Check for sign bit and convert as a 2s-compliment negative.
-                if (signed_bit_len < 0) and (field & (2 ** (bit_len - 1))):
-                    full_bit_len = bit_len + (bit_len % 8)
-                    field = field | ((2**full_bit_len - 1) ^ (2**bit_len - 1))
-                    field = field.to_bytes(
-                        full_bit_len // 8, byteorder="big", signed=False
-                    )
-                    field = int.from_bytes(field, byteorder="big", signed=True)
-                record.append(field)
-                # Shift to right bit_len bits
-                record_int = record_int >> (bit_len)
-
-            records.append(record)
-            # Print a "." every 10000 records to indicate script is running.
-            if i % 10000 == 0:
-                print(".", end="", flush=True)
-        print()
-
-        records = np.array(records)
-
-        # Save raw records to file as integers without tick rollover removed.
-        if trbl_sht["raw_rlovr"]:
-            np.savetxt(
-                "raw_records_rollover.txt", records, fmt="%d", header="", comments=""
-            )
-
-        # Shift the tick count if necessary, so that it relates to the first
-        # sample in each record (instead of the last).
-        if logger.timing == "first":
-            first_tic = 0
-        elif logger.timing == "last":
-            first_tic = int((logger.smpls_per_rec - 1) * logger.sample_epoch)
-        last_field = len(logger.rec_fmt) - 1
-        ticks_ms = records[:, last_field - logger.fmt_field["tic"]] - first_tic
-
-        nominal_begin_tick = rec_begin * logger.record_epoch
-        # print(f'Tick field length (in bits): {tic_field_len}')
-
-        # If time tick values are not pressent then populate tick values with
-        # assumed nominal tick count.
-        if ticks_ms[-1] <= 0 and ticks_ms[1] <= 0:
-            print(
-                "ATTENTION!!! It appears that time-tick values were not recorded "
-                "in the raw data file. All time values in the output are only "
-                "as accurate as the PCB oscillator. Values from the  precision "
-                "clock are not available!"
-            )
-            record_epoch = logger.sample_epoch * logger.smpls_per_rec
-            stop = nominal_begin_tick + (ticks_ms.size) * record_epoch
-            ticks_ms = np.arange(nominal_begin_tick, stop, record_epoch)
-            records[:, last_field - logger.fmt_field["tic"]] = ticks_ms
-            return records
-
-        # Remove tick count rollovers and make actual ticks continuously
-        # increasing.
-        rollover_period = 2**logger.tic_bit_len  # in millisec
-        # print(f'Rollover length (in millisec/ticks): {rollover_period}')
-        # The number of rollovers prior to the beginning of the specified data
-        # window.
-        nom_rollovers_begin = int(nominal_begin_tick / rollover_period)
-        nom_rollover_balance = nominal_begin_tick % rollover_period
-        # Does the nominal rollover count of the first record align with the
-        # actual count. (Within 1e7 millisec or approx 166 minutes.)
-        if abs(ticks_ms[0] - nom_rollover_balance) < 1e7:
-            actl_rollovers_begin = nom_rollovers_begin
-        elif ticks_ms[0] - nom_rollover_balance > 1e7:
-            # This indicates that a nominal rollover should have occurred but
-            # the actual rollover hasn't yet.
-            actl_rollovers_begin = nom_rollovers_begin - 1
-        else:
-            # This indicates that a nominal rollover should not have occurred
-            # yet but the actual rollover has already.
-            actl_rollovers_begin = nom_rollovers_begin + 1
-
-        # {rollovers} contains index of the first record after each rollover.
-        rollovers = np.where(ticks_ms[:-1] > ticks_ms[1:])[0] + 1
-        cumtv_rollovers = actl_rollovers_begin
-        if cumtv_rollovers != 0:
-            ticks_ms = ticks_ms + rollover_period * cumtv_rollovers
-
-        for idx, rollover in np.ndenumerate(rollovers):
-            if rollover == rollovers[-1]:
-                nxt_rollover = nrecs_want
-            else:
-                nxt_rollover = rollovers[idx[0] + 1]
-            # print(rollover, nxt_rollover)
-            if (ticks_ms[rollover + 1] - ticks_ms[rollover]) != 0:
-                # Two consecutive identical tick counts indicates recording
-                # has stopped.
-                if nxt_rollover - rollover == 1:
-                    # If the tick count does not rollover cleanly two
-                    # consecutive tick records indicate a rollover (ie it takes
-                    # more than onerecord to reset to zero), then for first
-                    # record after the rollover calc as the previous cumulative
-                    # tick count plus a std record period.
-                    ticks_ms[rollover] = ticks_ms[rollover - 1] + logger.record_epoch
-                elif (
-                    abs(
-                        (ticks_ms[rollover + 1] - ticks_ms[rollover - 1])
-                        - 2 * logger.record_epoch
-                    )
-                    < 2
-                ):
-                    # If the record immediately before and after the currently
-                    # indicated rollover are within 2ms of the expected time
-                    # diff of 2 epochs, then the current single time tick is
-                    # corrupt and not an actual rollover.
-                    ticks_ms[rollover] = ticks_ms[rollover - 1] + logger.record_epoch
-                elif (
-                    abs(
-                        (ticks_ms[rollover] - ticks_ms[rollover - 2])
-                        - 2 * logger.record_epoch
-                    )
-                    < 2
-                ):
-                    # If the currently indicated rollover record and two records
-                    # previous are within 2ms of the expected time diff of
-                    # 2 epochs, then the previous single time tick is
-                    # corrupt and not an actual rollover.
-                    ticks_ms[rollover - 1] = (
-                        ticks_ms[rollover - 2] + logger.record_epoch
-                    )
-                else:
-                    cumtv_rollovers = cumtv_rollovers + 1
-                    ticks_ms[rollover:nrecs_want] = (
-                        ticks_ms[rollover:nrecs_want] + rollover_period
-                    )
-                    rollover_dt = clk_start_dt + np.timedelta64(
-                        ticks_ms[rollover], "ms"
-                    )
-                    print(f"A time tick rollover occurred at " f"{rollover_dt}.")
-    records[:, last_field - logger.fmt_field["tic"]] = ticks_ms
-
-    return records
-
-
 ###############################################################################
-def clockdrift(
-    apg_filename, logger, clk_start_dt, gpssync_dt, sync_tick_count, trbl_sht
-):
-    """Calculates the clock drift using one of two methods.
-
-    The expected number of tick counts between clk_start_dt and gpssync_dt
-    will be calculated. The size of the tick record in logger['tic_bit_len'] is
-    used to determine when the tick count 'rolls over' to zero.
-    If sync_tick_count is provided, the difference between this and the
-    expected value gives the drift in ticks (milliseconds).
-    If sync_tick_count is not present, it is assumed that a fixed frequency has
-    been injected into the raw data precisely at gpssync_dt. The precise tick
-    count when this frequency starts is detected in the data and this value
-    is used in place of sync_tick_count.
-    """
-    millisecs_logged = dt64_utils.delta64_to_ms(gpssync_dt - clk_start_dt)
-
-    if sync_tick_count is None:
-        # Assign names to column numbers of raw data array.
-        # Note that raw data array columns are reverse order to raw binary.
-        last_field = len(logger.rec_fmt) - 1
-        tick_col = last_field - logger.fmt_field["tic"]
-        pcore_col = last_field - logger.fmt_field["pcore"]
-        pn_col = last_field - logger.fmt_field["pn"]
-
-        # Window for identifying sync_tick_count is +/-5 minutes long.
-        sync_wndw_ms = 5 * 60000
-        # GPS sync time (gpssync_dt) is mid point of  window for sync.
-        wndw_begin_ms = dt64_utils.delta64_to_ms(gpssync_dt - clk_start_dt)
-        wndw_begin_ms = wndw_begin_ms - sync_wndw_ms
-        rec_begin = int(wndw_begin_ms / logger.record_epoch)
-        nrecs_want = int(sync_wndw_ms * 2 / logger.record_epoch) + 1
-
-        sync_records = extractrecords(
-            apg_filename, logger, nrecs_want, rec_begin, trbl_sht, clk_start_dt
-        )
-
-        # Save timesync records to file as integers with tick rollover removed.
-        if trbl_sht["raw_sync"]:
-            np.savetxt(
-                "raw_sync_records.txt", sync_records, fmt="%d", header="", comments=""
-            )
-
-        # Identify the start of the record block where the pressure values
-        # start changing again (ie This is where frequency injection for time
-        # sync occurs).
-        # Identify all consecutive row pairs where p_core changes.
-        pcore_diff = np.diff(sync_records[:, pcore_col])
-        pcore_diff_row = (np.where(pcore_diff != 0)[0]) + 1
-        # Select the final instance where p_core starts changing
-        # This exculdes any single noise values occuring before actual
-        # frequency injection.
-        diff_row_increments = np.diff(pcore_diff_row)
-        x = np.where(diff_row_increments > 1)[0] + 1
-        x = np.insert(x, 0, 0)
-        poss_sync_row = pcore_diff_row[x] - 1
-
-        # For each poss_sync_row check:
-        #   - immed prev row has all Pn values as zero,
-        #      (Indicates two consecutive p_core values to be identical
-        #       althoughsurrounding values continue changing)
-        #   - immed next row does not have all Pn values as zero.
-        #       (Indicates noise value occuring before actual frequency
-        #        injection.)
-        # It is possible for two consecutive p_core values
-        # to be identical although surrounding values continue changing.
-        for n in range(np.size(poss_sync_row) - 1, -1, -1):
-            sync_row = poss_sync_row[n]
-            prev_sync_row = sync_row - 1
-            prev_block = sync_records[prev_sync_row, :]
-            next_sync_row = sync_row + 1
-            next_block = sync_records[next_sync_row, :]
-
-            if pn_col > pcore_col:
-                prev_pn = prev_block[pcore_col + 1 : pn_col + 1]
-                next_pn = next_block[pcore_col + 1 : pn_col + 1]
-            else:
-                prev_pn = prev_block[pcore_col - 1 : pn_col - 1 : -1]
-                next_pn = next_block[pcore_col - 1 : pn_col - 1 : -1]
-
-            prev_nonzero = np.where(prev_pn != 0)[0]
-            next_nonzero = np.where(next_pn != 0)[0]
-            if not prev_nonzero.any() and next_nonzero.any():
-                sync_row = poss_sync_row[n]
-                break
-
-        try:
-            sync_block = sync_records[sync_row, :]
-        except UnboundLocalError:
-            sys.exit(
-                f"Unable to determine clock drift.\n"
-                f"The raw data in during the period {gpssync_dt} "
-                f"+/-{sync_wndw_ms/1000} seconds does not contain "
-                f"a frequency injection for syncing to."
-            )
-
-        if pn_col > pcore_col:
-            pn = sync_block[pcore_col + 1 : pn_col + 1]
-        else:
-            pn = sync_block[pcore_col - 1 : pn_col - 1 : -1]
-
-        nonzero = np.where(pn != 0)[0]
-        if nonzero.any():
-            i = logger.smpls_per_rec - nonzero.size
-        else:
-            i = logger.smpls_per_rec
-
-        sync_tick_count = sync_block[tick_col] + (i * logger.sample_epoch)
-        sync_tick_count = int(sync_tick_count)
-
-    else:
-        # Number of ticks_ms until rollover and restart at zero.
-        tick_rollover = 2**logger.tic_bit_len  # 1 tick = 1 millisecond
-        millisecs_logged = millisecs_logged % tick_rollover
-
-    # APG logger clock offset relative to GPS time (positive = APG > GPS)
-    clk_drift_at_end = int(sync_tick_count - millisecs_logged)
-
-    return clk_drift_at_end
-
-
 def remove_noise_meddiff(
     raw_data,
     mask_data,

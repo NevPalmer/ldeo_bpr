@@ -34,7 +34,6 @@ class Logger:
         all_logger_cfgs = ConfigParser()
         all_logger_cfgs.read(Path(filename))
         logger_cfg = dict(all_logger_cfgs[logger_version])
-        print(f"{logger_cfg=}")
         logger.head_len = int(logger_cfg["head_len"])
         logger.rec_len = int(logger_cfg["rec_len"])
         logger.smpls_per_rec = int(logger_cfg["smpls_per_rec"])

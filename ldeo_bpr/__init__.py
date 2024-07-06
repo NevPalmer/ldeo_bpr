@@ -10,9 +10,12 @@ from .constants import (
     PRESS_CONV_FCTR,
     STN_NAME_LEN,
     T_CHNL_CODE,
+    TROUBLE_SHOOT,
 )
+from .extract_records import extract_records
 from .logger import Logger
 from .paros import Paros
+from .raw_file import RawFile
 
 __all__ = [
     "NWK_NAME_LEN",
@@ -20,8 +23,11 @@ __all__ = [
     "PRESS_CONV_FCTR",
     "STN_NAME_LEN",
     "T_CHNL_CODE",
+    "TROUBLE_SHOOT",
+    "extract_records",
     "Logger",
     "Paros",
+    "RawFile",
     "dt64_utils",
     "parse_arguments",
     "__version__",
