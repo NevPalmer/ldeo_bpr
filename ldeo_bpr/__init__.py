@@ -1,8 +1,6 @@
 """Initialise ldeo_bpr package."""
 
-import ldeo_bpr.dt64_utils as dt64_utils
-
-from ._version import __version__
+from . import apg_read, dt64_utils
 from .arg_parser import parse_arguments
 from .constants import (
     NWK_NAME_LEN,
@@ -12,10 +10,10 @@ from .constants import (
     T_CHNL_CODE,
     TROUBLE_SHOOT,
 )
-from .extract_records import extract_records
 from .logger import Logger
 from .paros import Paros
-from .raw_file import RawFile
+from .raw_data import RawFile, extract_records
+from .version import __version__
 
 __all__ = [
     "NWK_NAME_LEN",
@@ -24,6 +22,7 @@ __all__ = [
     "STN_NAME_LEN",
     "T_CHNL_CODE",
     "TROUBLE_SHOOT",
+    "apg_read",
     "extract_records",
     "Logger",
     "Paros",

@@ -9,26 +9,28 @@ import obspy
 import scipy.signal as sig
 import scipy.stats as stat
 
-import ldeo_bpr as bpr
-from ldeo_bpr import dt64_utils
+from . import arg_parser, dt64_utils, raw_data
+from . import constants as const
+from .logger import Logger
+from .paros import Paros
 
 
 def main():
     """The first function run when this script is run directly."""
     # Retrieve CLI parameters.
-    args = bpr.parse_arguments()
+    args = arg_parser.parse_arguments()
 
     # Read Paros transducer coefficients from .ini file.
-    paros = bpr.Paros.from_file(filename=args.apgini, paros_sn=args.snapg)
+    paros = Paros.from_file(filename=args.apgini, paros_sn=args.snapg)
 
     # Read APG logger configuration parameters from .ini file.
-    logger = bpr.Logger.from_file(
+    logger = Logger.from_file(
         filename=args.loggerini,
         logger_version=args.loggerversion,
     )
 
     # Create a BPR raw data file object.
-    raw_file = bpr.RawFile(
+    raw_file = raw_data.RawFile(
         filename=args.infile,
         logger=logger,
         start_clk=args.clkstart,
@@ -129,9 +131,9 @@ def main():
 
 ###############################################################################
 def generate_results(
-    logger: bpr.Logger,
-    paros: bpr.Paros,
-    raw_file: bpr.RawFile,
+    logger: Logger,
+    paros: Paros,
+    raw_file: raw_data.RawFile,
     nwk_name,
     stn_name,
     bin_begin_dt,
@@ -172,7 +174,7 @@ def generate_results(
     # Extract records from APG file for the time window specified.
     print("Extracting raw records:\n", end="")
 
-    records = bpr.extract_records(
+    records = raw_data.extract_records(
         raw_file.filename,
         raw_file.start_clk,
         logger,
@@ -181,7 +183,7 @@ def generate_results(
     )
 
     # Save raw records to file as integers with tick rollover removed.
-    if bpr.TROUBLE_SHOOT["raw_no_rlovr"]:
+    if const.TROUBLE_SHOOT["raw_no_rlovr"]:
         np.savetxt(
             "raw_records_no-rollover.txt", records, fmt="%d", header="", comments=""
         )
@@ -223,7 +225,7 @@ def generate_results(
     ).astype("int64")
 
     # Write a summary file showing syncronised tic counts and exit.
-    if bpr.TROUBLE_SHOOT["tic_sync"]:
+    if const.TROUBLE_SHOOT["tic_sync"]:
         time_diff = ticks_ms - nom_ticks_t
         ticks_ms = np.column_stack((ticks_ms, nom_ticks_t, time_diff))
         summary_ticks_ms = [ticks_ms[0]]
@@ -400,7 +402,7 @@ def generate_results(
 
     facts = 1 - (coef_t0**2) / (presr_period_usec**2)
     pressure = coef_cv * facts * (1 - coef_dv * facts)  # pressure in PSIA
-    pressure = pressure * bpr.PRESS_CONV_FCTR  # Convert pressure units
+    pressure = pressure * const.PRESS_CONV_FCTR  # Convert pressure units
     pressure_raw = pressure
 
     if noisefilt:
@@ -569,7 +571,7 @@ def generate_results(
 
         dt_text = bin_begin.strftime("%Y-%m-%dT%H-%M-%Sz")
 
-        stats["channel"] = bpr.P_CHNL_CODE
+        stats["channel"] = const.P_CHNL_CODE
         stats["sampling_rate"] = 1000 / logger.sample_epoch
         trace_p = obspy.Trace(data=pressure_mseed, header=stats)
         stream_p = obspy.Stream(traces=[trace_p])
@@ -578,7 +580,7 @@ def generate_results(
         print(f'Writing pressure data to MiniSEED file "{mseed_filename}".')
         stream_p.write(mseed_filename, format="MSEED")
 
-        stats["channel"] = bpr.T_CHNL_CODE
+        stats["channel"] = const.T_CHNL_CODE
         stats["sampling_rate"] = 1000 / logger.record_epoch
         trace_t = obspy.Trace(data=temperature_mseed, header=stats)
         stream_t = obspy.Stream(traces=[trace_t])

@@ -1,7 +1,7 @@
 """Module conatining package global constants."""
 
 # Dictionary of flags for turning on/off trouble shooting outputs.
-# Assign False or '' to disable.
+# Assign True to enable and  False or '' to disable.
 TROUBLE_SHOOT: dict[str, bool] = {
     # Save raw data as a text file of binary 1s & 0s. (Very slow)
     "binary_out": False,

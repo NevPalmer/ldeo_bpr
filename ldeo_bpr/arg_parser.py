@@ -3,14 +3,16 @@
 import re
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
+from typing import Iterable
 
 import numpy as np
 
-import ldeo_bpr as bpr
-from ldeo_bpr import dt64_utils
+from . import constants as const
+from . import dt64_utils
+from .version import __version__
 
 
-def parse_arguments(args=None) -> Namespace:
+def parse_arguments(args: Iterable[str] = None) -> Namespace:
     """Parse command line arguments."""
     # Default values and choices for reading params from command line.
     apg_ini = Path("./ParosAPG.ini")
@@ -39,7 +41,7 @@ def parse_arguments(args=None) -> Namespace:
         "-V",
         "--version",
         action="version",
-        version=f"%(prog)s {bpr.__version__}",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "-i",
@@ -166,7 +168,7 @@ def parse_arguments(args=None) -> Namespace:
         "--network",
         help=(
             f"Network name to be used in MiniSEED file header. Max "
-            f"{bpr.NWK_NAME_LEN} characters."
+            f"{const.NWK_NAME_LEN} characters."
         ),
         type=nwk_name,
         default=None,
@@ -176,7 +178,7 @@ def parse_arguments(args=None) -> Namespace:
         "--station",
         help=(
             f"Station name to be used in MiniSEED file header. Max "
-            f"{bpr.STN_NAME_LEN} characters."
+            f"{const.STN_NAME_LEN} characters."
         ),
         type=stn_name,
         default=None,
@@ -243,17 +245,21 @@ def nwk_name(nwk_str: str) -> str:
     """Validation function for --network arg."""
     match = re.match(r"^[A-Za-z0-9_]+$", nwk_str)
     # match = re.match(r"^\w+$", nwk_str)
-    if not match or len(match.group(0)) != bpr.NWK_NAME_LEN:
+    if not match or len(match.group(0)) != const.NWK_NAME_LEN:
         # if not match:
-        raise ValueError(f"Network name must be maximum {bpr.NWK_NAME_LEN} charcters.")
+        raise ValueError(
+            f"Network name must be maximum {const.NWK_NAME_LEN} charcters."
+        )
     return nwk_str.upper()
 
 
 def stn_name(stn_str: str) -> str:
     """Validation function for --station arg."""
     match = re.match(r"^\w+$", stn_str)
-    if not match or len(match.group(0)) != bpr.STN_NAME_LEN:
-        raise ValueError(f"Station name must be maximum {bpr.STN_NAME_LEN} charcters.")
+    if not match or len(match.group(0)) != const.STN_NAME_LEN:
+        raise ValueError(
+            f"Station name must be maximum {const.STN_NAME_LEN} charcters."
+        )
     return stn_str.upper()
 
 
