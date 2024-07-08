@@ -22,8 +22,7 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
     logger_ini = Path("./APGlogger.ini")
     if not logger_ini.is_file():
         logger_ini: Path = package_path / "APGlogger.ini"
-    logger_versions: list[str] = ["CSAC2013", "Seascan2018", "TEST"]
-    clk_start: str = "2000-01-01_00:00:00"  # 'YYYY-MM-DD_hh:mm:ss'
+    clk_start: str = "2000-01-01T00:00:00"  # 'YYYY-MM-DDThh:mm:ss'
     out_filename: Path | None = None
     mseed_path: Path | None = None
     tmptr_smth_fctr: int = 1
@@ -62,8 +61,7 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         "-s",
         "--snapg",
         help="Serial number of the Paroscientific APG used. "
-        "This must correspond to the serial number of an "
-        "entry in the apgini file.",
+        "This must correspond to an entry in the file specified by --apgini.",
         type=str,
         required=True,
     )
@@ -79,8 +77,9 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
     parser.add_argument(
         "-v",
         "--loggerversion",
-        help="Specify the version/firmware of the APG logger board used.",
-        choices=logger_versions,
+        help="Specify the version/firmware of the APG logger board used."
+        "This must correspond to an entry in the file specified by "
+        "--loggerversion.",
         type=str,
         required=True,
     )
@@ -109,7 +108,8 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         "-c",
         "--clkstart",
         help=f"Precise date and time when the logger clock "
-        f'was started. Format: "YYYY-MM-DDThh:mm:ss" '
+        f'was started. Format: "YYYY-MM-DDThh:mm:ss" or "YYYY:DDD:hh:mm:ss" '
+        f"(optionally include decimal seconds)"
         f'Default: "{clk_start}"',
         type=dt64_utils.dtstr_to_dt64,
         default=clk_start,
@@ -119,7 +119,8 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         "--beginwndw",
         help="Date and time to begin data extraction. "
         "Assumes beginning of file if omitted. "
-        'Format: "YYYY-MM-DDThh:mm:ss.s"',
+        'Format: "YYYY-MM-DDThh:mm:ss" or "YYYY:DDD:hh:mm:ss" '
+        "(optionally include decimal seconds)",
         type=dt64_utils.dtstr_to_dt64,
     )
     parser.add_argument(
@@ -127,7 +128,8 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         "--endwndw",
         help="Date and time to end data extraction. Assumes "
         "end of file if omitted. "
-        'Format: "YYYY-MM-DDThh:mm:ss.s"',
+        'Format: "YYYY-MM-DDThh:mm:ss" or "YYYY:DDD:hh:mm:ss" '
+        "(optionally include decimal seconds)",
         type=dt64_utils.dtstr_to_dt64,
     )
     parser.add_argument(
@@ -149,7 +151,8 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         "--gpssynctime",
         help="Precise date and time from GPS clock for "
         "syncronising end time. No clock drift adjustment is "
-        'made if omitted. Format: "YYYY-DDD_hh:mm:ss"',
+        'made if omitted. Format: "YYYY-MM-DDThh:mm:ss" or "YYYY:DDD:hh:mm:ss" '
+        "(optionally include decimal seconds)",
         type=dt64_utils.dtstr_to_dt64,
     )
     parser.add_argument(

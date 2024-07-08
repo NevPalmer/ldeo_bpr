@@ -48,12 +48,15 @@ def dtstr_to_dt64(datetime_str: str) -> np.datetime64:
     match1 = re.match(r"^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$", standardised_str)
     match2 = re.match(r"^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}\.\d+$", standardised_str)
     match3 = re.match(r"^\d{4}_\d{3}_\d{2}_\d{2}_\d{2}$", standardised_str)
+    match4 = re.match(r"^\d{4}_\d{3}_\d{2}_\d{2}_\d{2}\.\d+$", standardised_str)
     if match1:
         pydt = dt.datetime.strptime(standardised_str, "%Y_%m_%d_%H_%M_%S")
     elif match2:
         pydt = dt.datetime.strptime(standardised_str, "%Y_%m_%d_%H_%M_%S.%f")
     elif match3:
         pydt = dt.datetime.strptime(standardised_str, "%Y_%j_%H_%M_%S")
+    elif match4:
+        pydt = dt.datetime.strptime(standardised_str, "%Y_%j_%H_%M_%S.%f")
     else:
         raise ValueError(f"'{datetime_str}' is not a valid datetime string.")
     return np.datetime64(pydt).astype("datetime64[ms]")
