@@ -89,11 +89,10 @@ class RawFile:
 
         sync_records = extract_records(
             self.filename,
-            self.logger,
-            num_rcrds_wanted,
-            start_rcrd,
-            const.TROUBLE_SHOOT,
             self.start_clk,
+            self.logger,
+            start_rcrd,
+            num_rcrds_wanted,
         )
 
         # Save timesync records to file as integers with tick rollover removed.
