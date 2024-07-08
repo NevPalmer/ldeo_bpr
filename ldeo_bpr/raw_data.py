@@ -87,13 +87,19 @@ class RawFile:
         start_rcrd = int(wndw_begin_ms / self.logger.record_epoch)
         num_rcrds_wanted = int(sync_wndw_ms * 2 / self.logger.record_epoch) + 1
 
-        sync_records = extract_records(
-            self.filename,
-            self.start_clk,
-            self.logger,
-            start_rcrd,
-            num_rcrds_wanted,
-        )
+        try:
+            sync_records = extract_records(
+                self.filename,
+                self.start_clk,
+                self.logger,
+                start_rcrd,
+                num_rcrds_wanted,
+            )
+        except OSError as err:
+            sys.exit(
+                f"The 'gpssynctime' falls outside the start and end time of "
+                f"the logged file. Exiting...\nError msg: {err}"
+            )
 
         # Save timesync records to file as integers with tick rollover removed.
         if const.TROUBLE_SHOOT["raw_sync"]:

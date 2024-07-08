@@ -21,13 +21,25 @@ def main():
     args = arg_parser.parse_arguments()
 
     # Read Paros transducer coefficients from .ini file.
-    paros = Paros.from_file(filename=args.apgini, paros_sn=args.snapg)
+    try:
+        paros = Paros.from_file(filename=args.apgini, paros_sn=args.snapg)
+    except KeyError as key:
+        sys.exit(
+            f"The file '{args.apgini}' does not contain an entry for "
+            f"APG sensor with serial number {key}."
+        )
 
     # Read APG logger configuration parameters from .ini file.
-    logger = Logger.from_file(
-        filename=args.loggerini,
-        logger_version=args.loggerversion,
-    )
+    try:
+        logger = Logger.from_file(
+            filename=args.loggerini,
+            logger_version=args.loggerversion,
+        )
+    except KeyError as key:
+        sys.exit(
+            f"The file '{args.loggerini}' does not contain an entry for "
+            f"BPR logger type {key}."
+        )
 
     # Create a BPR raw data file object.
     raw_file = raw_data.RawFile(
