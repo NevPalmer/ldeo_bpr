@@ -9,10 +9,10 @@ import obspy
 import scipy.signal as sig
 import scipy.stats as stat
 
-from . import arg_parser, dt64_utils, raw_data
-from . import constants as const
-from .logger import Logger
-from .paros import Paros
+from ldeo_bpr import arg_parser, dt64_utils, raw_data
+from ldeo_bpr import constants as const
+from ldeo_bpr.logger import Logger
+from ldeo_bpr.paros import Paros
 
 
 def main():
