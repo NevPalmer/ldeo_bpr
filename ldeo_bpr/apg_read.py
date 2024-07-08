@@ -746,9 +746,17 @@ def remove_noise_meddiff(
     Replace deleted data points with interpolated values.
     """
     bins = int((millisecs_all.max() - millisecs_all.min()) / bin_size)
-    binned_tptr, bin_edges, _ = stat.binned_statistic(
-        millisecs, mask_data, "median", bins
-    )
+    try:
+        binned_tptr, bin_edges, _ = stat.binned_statistic(
+            millisecs, mask_data, "median", bins
+        )
+    except ValueError as err:
+        sys.exit(
+            f"The data window or bin selected is too short for the filter "
+            f"parameters currently specified in the script. Either select "
+            f"a longer data sample or edit the 'remove_noise_meddiff' "
+            f"filter in module 'apg_read.py'. Exiting...\nError msg: {err}"
+        )
     bin_centers = (bin_edges[1:] + bin_edges[:-1]) / 2
     tptr_medsmth = np.interp(millisecs, bin_centers, binned_tptr)
     difference = np.abs(mask_data - tptr_medsmth)
