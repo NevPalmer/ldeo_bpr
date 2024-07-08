@@ -79,8 +79,8 @@ class RawFile:
         pcore_col = last_field - self.logger.fmt_field["pcore"]
         pn_col = last_field - self.logger.fmt_field["pn"]
 
-        # Window for identifying sync_tick_count is 30 seconds long.
-        sync_wndw_ms = 30_000
+        # Window for identifying sync_tick_count is ±15 seconds long.
+        sync_wndw_ms = 15_000
         # GPS sync time (gpssync_dt) is mid point of  window for sync.
         wndw_begin_ms = dt64_utils.delta64_to_ms(self.gpssync_dt - self.start_clk)
         wndw_begin_ms = wndw_begin_ms - sync_wndw_ms
