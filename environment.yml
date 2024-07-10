@@ -4,6 +4,7 @@ dependencies:
   - matplotlib >=3.3
   - numpy >=1.22
   - obspy >=1.4
+  - pyserial >=3.5
   - scipy >=1.7
   - setuptools
   - setuptools-scm
