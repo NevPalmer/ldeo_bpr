@@ -18,28 +18,15 @@ from ldeo_bpr.paros import Paros
 def main():
     """The first function run when this script is run directly."""
     # Retrieve CLI parameters.
-    args = arg_parser.parse_arguments()
+    args = arg_parser.parse_args_apg_read()
 
     # Read Paros transducer coefficients from .ini file.
-    try:
-        paros = Paros.from_file(filename=args.apgini, paros_sn=args.snapg)
-    except KeyError as key:
-        sys.exit(
-            f"The file '{args.apgini}' does not contain an entry for "
-            f"APG sensor with serial number {key}."
-        )
+    paros = Paros.from_file(filename=args.apgini, paros_sn=args.snapg)
 
     # Read APG logger configuration parameters from .ini file.
-    try:
-        logger = Logger.from_file(
-            filename=args.loggerini,
-            logger_version=args.loggerversion,
-        )
-    except KeyError as key:
-        sys.exit(
-            f"The file '{args.loggerini}' does not contain an entry for "
-            f"BPR logger type {key}."
-        )
+    logger = Logger.from_file(
+        filename=args.loggerini, logger_version=args.loggerversion
+    )
 
     # Create a BPR raw data file object.
     raw_file = raw_data.RawFile(
@@ -414,7 +401,7 @@ def generate_results(
 
     facts = 1 - (coef_t0**2) / (presr_period_usec**2)
     pressure = coef_cv * facts * (1 - coef_dv * facts)  # pressure in PSIA
-    pressure = pressure * const.PRESS_CONV_FCTR  # Convert pressure units
+    pressure = pressure * const.PSIA_TO_PASCAL  # Convert pressure units
     pressure_raw = pressure
 
     if noisefilt:

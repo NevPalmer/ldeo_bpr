@@ -1,5 +1,6 @@
 """Module for paroscientific APG pressure gauges."""
 
+import sys
 from configparser import ConfigParser
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,8 +25,14 @@ class Paros:
         paros.ser_no = paros_sn
         paros_cfgs = ConfigParser()
         paros_cfgs.read(Path(filename))
-        for coef in paros_coefs:
-            coef_values = paros_cfgs[paros.ser_no][coef].split(",")
-            setattr(paros, coef, tuple(float(x) for x in coef_values[::-1]))
+        try:
+            for coef in paros_coefs:
+                coef_values = paros_cfgs[paros.ser_no][coef].split(",")
+                setattr(paros, coef, tuple(float(x) for x in coef_values[::-1]))
+        except KeyError as key:
+            sys.exit(
+                f"The file '{filename}' does not contain an entry for "
+                f"APG sensor with serial number {key}."
+            )
         paros.y = paros.y + (0.0,)  # Constant term for 'Y' is zero.
         return paros
