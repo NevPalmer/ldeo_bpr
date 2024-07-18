@@ -24,4 +24,16 @@ P_CHNL_CODE = "HDH"
 T_CHNL_CODE = "BKO"
 
 # Pressure conversion factor from PSIA to Pascal.
-PRESS_CONV_FCTR = 6.894757293168e3
+PSIA_TO_PASCAL = 6.894757293168e3
+
+# Default values and choices for reading params from command line.
+DFLT_APG_INI: str = "ParosAPG.ini"
+DFLT_LOGGER_INI: str = "APGlogger.ini"
+DFLT_CLK_START: str = "2000-01-01T00:00:00"  # 'YYYY-MM-DDThh:mm:ss'
+DFLT_TMPTR_SMTH_FCTR: int = 1
+DFLT_DECIMATE_INTVL: int = 0
+SER_PORT: str = "COM1"
+SER_BAUD: int = 9600
+SER_PARITY: str = "N"
+SER_STOP: int = 1
+SER_BYTESIZE: int = 8

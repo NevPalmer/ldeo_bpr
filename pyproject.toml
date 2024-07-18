@@ -12,6 +12,7 @@ dependencies = [
     "matplotlib>=3.3",
     "numpy>=1.22",
     "obspy>=1.4",
+    "pyserial>=3.5",
     "scipy>=1.7"
 ]
 authors = [{name= "Neville Palmer", email = "n.palmer@gns.cri.nz"}]
@@ -31,6 +32,7 @@ keywords = ["bpr", "apg", "obp", "absolute pressure", "seafloor"]
 
 [project.scripts]
 apg_read = "ldeo_bpr.apg_read:main"
+apg_read_serial = "ldeo_bpr.apg_read_serial:main"
 
 
 [tool.setuptools]

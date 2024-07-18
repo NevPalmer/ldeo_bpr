@@ -12,36 +12,75 @@ from . import dt64_utils
 from .version import __version__
 
 
-def parse_arguments(args: Iterable[str] = None) -> Namespace:
-    """Parse command line arguments."""
-    # Default values and choices for reading params from command line.
-    apg_ini = Path("./ParosAPG.ini")
-    package_path: Path = Path(__file__).parents[1]
-    if not apg_ini.is_file():
-        apg_ini: Path = package_path / "ParosAPG.ini"
-    logger_ini = Path("./APGlogger.ini")
-    if not logger_ini.is_file():
-        logger_ini: Path = package_path / "APGlogger.ini"
-    clk_start: str = "2000-01-01T00:00:00"  # 'YYYY-MM-DDThh:mm:ss'
-    out_filename: Path | None = None
-    mseed_path: Path | None = None
-    tmptr_smth_fctr: int = 1
-    decmt_intvl: int = 0
-
-    # Read in parameters from command line
+def parse_args_apg_read(args: Iterable[str] = None) -> Namespace:
+    """Parse CLI arguments for apg_read.py."""
     helpdesc = (
         "Reads a raw APG data file and outputs decimated pressure data."
         "Two .ini files are required which must contain configuration values "
         "for the specific Paroscientific pressure transducer and the correct "
         "version of APG logger board used."
     )
-    parser = ArgumentParser(description=helpdesc)
+    parser = ArgumentParser(
+        parents=[
+            base_parser(),
+            infile_parser(),
+            ini_cfg_parser(),
+            processing_param_parser(),
+            outfile_parser(),
+            plot_param_parser(),
+        ],
+        description=helpdesc,
+    )
+    args = parser.parse_args(args)
+
+    args.plot = {"format": args.plot[:1], "output": args.plot[1:]}
+
+    if args.mseedpath and not (args.network and args.station):
+        parser.error(
+            "Arguments -n/--station and -w/--network are both required because "
+            "-m/--mseedpath was specified."
+        )
+
+    return args
+
+
+def parse_args_apg_read_serial(args: Iterable[str] = None) -> Namespace:
+    """Parse CLI arguments for apg_read_serial.py."""
+    helpdesc = (
+        "Reads a raw APG data file and outputs decimated pressure data."
+        "Two .ini files are required which must contain configuration values "
+        "for the specific Paroscientific pressure transducer and the correct "
+        "version of APG logger board used."
+    )
+    parser = ArgumentParser(
+        parents=[
+            base_parser(),
+            ini_cfg_parser(),
+            serial_param_parser(),
+        ],
+        description=helpdesc,
+    )
+    args = parser.parse_args(args)
+
+    return args
+
+
+def base_parser() -> None:
+    """Return standard base parser common to all."""
+    parser = ArgumentParser(add_help=False)
     parser.add_argument(
         "-V",
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
     )
+
+    return parser
+
+
+def infile_parser() -> None:
+    """Return parser to specify input file."""
+    parser = ArgumentParser(add_help=False)
     parser.add_argument(
         "-i",
         "--infile",
@@ -49,6 +88,18 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         type=Path,
         required=True,
     )
+
+    return parser
+
+
+def ini_cfg_parser() -> None:
+    """Return parser for .ini configuration files."""
+    parser = ArgumentParser(add_help=False)
+
+    package_path: Path = Path(__file__).parents[1]
+    apg_ini = Path(".") / const.DFLT_APG_INI
+    if not apg_ini.is_file():
+        apg_ini: Path = package_path / const.DFLT_APG_INI
     parser.add_argument(
         "-a",
         "--apgini",
@@ -57,6 +108,7 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         type=Path,
         default=apg_ini,
     )
+
     parser.add_argument(
         "-s",
         "--snapg",
@@ -65,6 +117,10 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         type=str,
         required=True,
     )
+
+    logger_ini = Path(".") / const.DFLT_LOGGER_INI
+    if not logger_ini.is_file():
+        logger_ini: Path = package_path / const.DFLT_LOGGER_INI
     parser.add_argument(
         "-l",
         "--loggerini",
@@ -74,6 +130,7 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         type=Path,
         default=logger_ini,
     )
+
     parser.add_argument(
         "-v",
         "--loggerversion",
@@ -83,6 +140,14 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         type=str,
         required=True,
     )
+
+    return parser
+
+
+def processing_param_parser() -> None:
+    """Return parser to retrieve processing parameters."""
+    parser = ArgumentParser(add_help=False)
+
     parser.add_argument(
         "-d",
         "--decimate",
@@ -90,30 +155,33 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         f"pressure decimation. Zero for no decimation. "
         f"Value must equal a single digit integer of seconds "
         f"or minutes or a multiple of 5 or 10."
-        f'Default: "{decmt_intvl}"',
+        f'Default: "{const.DFLT_DECIMATE_INTVL}"',
         type=int,
-        default=decmt_intvl,
+        default=const.DFLT_DECIMATE_INTVL,
     )
+
     parser.add_argument(
         "-t",
         "--tempsmth",
         help=f"Temperature smoothing factor (must be an odd "
         f"integer). 5001 gives sensible smoothing. 50001 "
         f"gives better smoothing for Seascan logger but is "
-        f'slow. Default: "{tmptr_smth_fctr}"',
+        f'slow. Default: "{const.DFLT_TMPTR_SMTH_FCTR}"',
         type=int,
-        default=tmptr_smth_fctr,
+        default=const.DFLT_TMPTR_SMTH_FCTR,
     )
+
     parser.add_argument(
         "-c",
         "--clkstart",
         help=f"Precise date and time when the logger clock "
         f'was started. Format: "YYYY-MM-DDThh:mm:ss" or "YYYY:DDD:hh:mm:ss" '
         f"(optionally include decimal seconds)"
-        f'Default: "{clk_start}"',
+        f'Default: "{const.DFLT_CLK_START}"',
         type=dt64_utils.dtstr_to_dt64,
-        default=clk_start,
+        default=const.DFLT_CLK_START,
     )
+
     parser.add_argument(
         "-b",
         "--beginwndw",
@@ -123,6 +191,7 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         "(optionally include decimal seconds)",
         type=dt64_utils.dtstr_to_dt64,
     )
+
     parser.add_argument(
         "-e",
         "--endwndw",
@@ -132,6 +201,7 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         "(optionally include decimal seconds)",
         type=dt64_utils.dtstr_to_dt64,
     )
+
     parser.add_argument(
         "-B",
         "--bininterval",
@@ -146,6 +216,7 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         type=dt64_utils.intvlstr_to_dt64,
         default=np.timedelta64(0, "ms"),
     )
+
     parser.add_argument(
         "-g",
         "--gpssynctime",
@@ -155,6 +226,7 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         "(optionally include decimal seconds)",
         type=dt64_utils.dtstr_to_dt64,
     )
+
     parser.add_argument(
         "-y",
         "--synctickcount",
@@ -166,6 +238,23 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         'GPSSYNCTIME is omitted. Format: "0xHHHHHHHHHH"',
         type=lambda x: int(x, 0),
     )
+
+    parser.add_argument(
+        "--noisefilt",
+        help="Apply a binned median to pressure & temperature data and remove"
+        "any data points that are greater than a predefined range from the"
+        "median values.",
+        action="store_true",
+        default=False,
+    )
+
+    return parser
+
+
+def outfile_parser() -> None:
+    """Return parser for output file parameters."""
+    parser = ArgumentParser(add_help=False)
+
     parser.add_argument(
         "-w",
         "--network",
@@ -176,6 +265,7 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         type=nwk_name,
         default=None,
     )
+
     parser.add_argument(
         "-n",
         "--station",
@@ -186,6 +276,8 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         type=stn_name,
         default=None,
     )
+
+    out_filename: Path | None = None
     parser.add_argument(
         "-o",
         "--outfile",
@@ -194,6 +286,8 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         type=Path,
         default=out_filename,
     )
+
+    mseed_path: Path | None = None
     parser.add_argument(
         "-m",
         "--mseedpath",
@@ -203,6 +297,14 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         type=Path,
         default=mseed_path,
     )
+
+    return parser
+
+
+def plot_param_parser() -> None:
+    """Return parser to retrieve plotting parameters."""
+    parser = ArgumentParser(add_help=False)
+
     parser.add_argument(
         "-f",
         "--fmttime",
@@ -212,6 +314,7 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         choices=["s", "d"],
         default="s",
     )
+
     parser.add_argument(
         "-p",
         "--plot",
@@ -224,24 +327,46 @@ def parse_arguments(args: Iterable[str] = None) -> Namespace:
         choices=["n", "fs", "fd", "fb", "rs", "rd", "rb"],
         default="n",
     )
+
+    return parser
+
+
+def serial_param_parser() -> None:
+    """Return parser to retrieve plotting parameters."""
+    parser = ArgumentParser(add_help=False)
+
     parser.add_argument(
-        "--noisefilt",
-        help="Apply a binned median to pressure & temperature data and remove"
-        "any data points that are greater than a predefined range from the"
-        "median values.",
-        action="store_true",
-        default=False,
+        "--serport",
+        help=f'Serial port name. Default: "{const.SER_PORT}"',
+        type=str,
+        default=const.SER_PORT,
     )
-    args = parser.parse_args(args)
+    parser.add_argument(
+        "--serbaud",
+        help=f"Serial baud rate. Default: {const.SER_BAUD}",
+        type=int,
+        default=const.SER_BAUD,
+    )
+    parser.add_argument(
+        "--serparity",
+        help=f'Serial parity. Default: "{const.SER_PARITY}"',
+        type=str,
+        default=const.SER_PARITY,
+    )
+    parser.add_argument(
+        "--serstop",
+        help=f"Serial stop bit. Default: {const.SER_STOP}",
+        type=int,
+        default=const.SER_STOP,
+    )
+    parser.add_argument(
+        "--serbytesize",
+        help=f"Serial byte size. Default: {const.SER_BYTESIZE}",
+        type=int,
+        default=const.SER_BYTESIZE,
+    )
 
-    args.plot = {"format": args.plot[:1], "output": args.plot[1:]}
-
-    if args.mseedpath and not (args.network and args.station):
-        parser.error(
-            "Arguments -n/--station and -w/--network are both required because "
-            "-m/--mseedpath was specified."
-        )
-    return args
+    return parser
 
 
 def nwk_name(nwk_str: str) -> str:
@@ -266,6 +391,7 @@ def stn_name(stn_str: str) -> str:
     return stn_str.upper()
 
 
-def plot_flags(flags: str) -> dict[str, str]:
-    """Validation functionfor --plot arg."""
-    return {"format": flags[:1], "output": flags[1:]}
+### Choices are checked after type conversion performed so this fails.
+# def plot_flags(flags: str) -> dict[str, str]:
+#     """Validation functionfor --plot arg."""
+#     return {"format": flags[:1], "output": flags[1:]}

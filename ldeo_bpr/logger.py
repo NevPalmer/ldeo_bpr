@@ -5,6 +5,8 @@ from configparser import ConfigParser
 from dataclasses import dataclass
 from pathlib import Path
 
+from ldeo_bpr.math_utils import eval_exponent_str
+
 
 @dataclass()
 class Logger:
@@ -34,18 +36,24 @@ class Logger:
         all_logger_cfgs = ConfigParser()
         all_logger_cfgs.read(Path(filename))
         logger_cfg = dict(all_logger_cfgs[logger_version])
-        logger.head_len = int(logger_cfg["head_len"])
-        logger.rec_len = int(logger_cfg["rec_len"])
-        logger.smpls_per_rec = int(logger_cfg["smpls_per_rec"])
-        logger.sample_epoch = int(logger_cfg["epoch"])
-        logger.record_epoch = logger.sample_epoch * logger.smpls_per_rec
-        logger.clock_freq = int(logger_cfg["clock_freq"])
-        logger.tp_fctr = _eval_exponent_str(logger_cfg["tp_fctr"])
-        logger.tp_cnst = int(logger_cfg["tp_cnst"])
-        logger.pp_fctr = _eval_exponent_str(logger_cfg["pp_fctr"])
-        logger.pp_cnst = int(logger_cfg["pp_cnst"])
-        logger.timing = logger_cfg["timing"]
-        logger.rec_fmt = tuple([int(x) for x in logger_cfg["rec_fmt"].split(",")])
+        try:
+            logger.head_len = int(logger_cfg["head_len"])
+            logger.rec_len = int(logger_cfg["rec_len"])
+            logger.smpls_per_rec = int(logger_cfg["smpls_per_rec"])
+            logger.sample_epoch = int(logger_cfg["epoch"])
+            logger.record_epoch = logger.sample_epoch * logger.smpls_per_rec
+            logger.clock_freq = int(logger_cfg["clock_freq"])
+            logger.tp_fctr = eval_exponent_str(logger_cfg["tp_fctr"])
+            logger.tp_cnst = int(logger_cfg["tp_cnst"])
+            logger.pp_fctr = eval_exponent_str(logger_cfg["pp_fctr"])
+            logger.pp_cnst = int(logger_cfg["pp_cnst"])
+            logger.timing = logger_cfg["timing"]
+            logger.rec_fmt = tuple([int(x) for x in logger_cfg["rec_fmt"].split(",")])
+        except KeyError as key:
+            sys.exit(
+                f"The file '{filename}' does not contain an entry for "
+                f"BPR logger type {key}."
+            )
 
         fmt_field = {}
         fmt_field["tic"] = int(logger_cfg["tic_field"])
@@ -74,22 +82,3 @@ class Logger:
         logger.tic_bit_len = logger.rec_fmt[fmt_field["tic"]]
 
         return logger
-
-
-###############################################################################
-# Miscellaneous utility functions.
-def _eval_exponent_str(exp_str: str) -> int:
-    """Convert a string in the form "X**Y" to an int.
-
-    Will also accept a pure integer string ("X") as input.
-    """
-    try:
-        return int(exp_str)
-    except ValueError:
-        base, exponent = exp_str.split("**", 1)
-        try:
-            return int(base) ** int(exponent)
-        except ValueError as err:
-            raise ValueError(
-                f"'{exp_str}' is not a valid exponent string to be evaluated."
-            ) from err
