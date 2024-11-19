@@ -41,19 +41,39 @@ def main():
     print(f"STATS OF RAW FILE: {raw_file.filename}")
     print(f"Time of first sample = {raw_file.start_clk}")
     print(f"Time of last sample = {raw_file.end_clk}")
-    file_duration_days = raw_file.file_duration_ms / (24 * 3600000)
+    file_duration_days = raw_file.actl_file_tics_ms / (24 * 3600000)
     print(f"File duration = {file_duration_days} days")
     print(f"Filesize = {raw_file.filesize_b} bytes")
     print(f"Number of records = {raw_file.num_rcrds:d}")
+    print(
+        f"NOTE: Times and dates given above are based on "
+        f"the Precise tick count values adjusted for the "
+        f"drift of the precision time base module.\n"
+        f"Precise tick counts are generated from the precision time base "
+        f"module/clock (eg CSAC, Seascan, etc).\n"
+        f"'Nominal' tick counts are calculated by counting the number "
+        f"of sample epochs multiplied by the sample period "
+        f"({logger.sample_epoch} millisecs).\n"
+        f"For some APG loggers (eg CSAC) the Nominal and Precise tick counts are "
+        f"identical because they are both derived from the precision time base module.\n"
+        f"For other loggers (eg Seascan) the Nominal timing is derived from an "
+        f"imprecise PCB oscillator which drifts relative to the Precise "
+        f"tick count. This 'Nominal' tick difference is corrected contuously in the "
+        f"results by interpolating every record.\n"
+        f"Nominal tick count difference at end of recording (millisecs): "
+        f"{raw_file.nom_tick_diff_ms}\n"
+        f"   (Nominal tick counts - Precise)"
+    )
     if raw_file.clockdrift_ms is None:
         print(
-            "No clock drift has been calculated or applied.\n"
+            "No clock drift for precision time base has been calculated or applied.\n"
             "   Insufficient parameters supplied."
         )
     else:
         print(
-            f"Clock drift at end of recording (millisecs): {raw_file.clockdrift_ms}\n"
-            f"   (logged time - actual GPS time)"
+            f"Clock drift for precision time base at end of recording (millisecs): "
+            f":{raw_file.clockdrift_ms}\n"
+            f"   (Precise tick counts - actual GPS time)"
         )
 
     print("=" * 80)
@@ -67,23 +87,6 @@ def main():
     wndw_len_ms = dt64_utils.delta64_to_ms(wndw_len)
     wndw_len_days = wndw_len_ms / (24 * 3600000)
     print(f"Window length (days): {wndw_len_days}")
-
-    print(
-        f"NOTE: All times given above are Nominal. \n"
-        f'"Nominal" times are calculated by counting the number '
-        f"of sample epochs multiplied by the sample period "
-        f"({logger.sample_epoch} secs).\n"
-        f'"Actual" times are the actual recorded tick count values '
-        f"before any adjustment for clock drift.\n"
-        f"For some APG loggers, Nominal and Actual times correspond "
-        f"precisely, some do not. Generally CSAC loggers do and Seascan "
-        f"loggers do not.\n"
-        f"If a difference is noted below, the nominal epochs are not "
-        f"precise and the tick count values have been used for precise "
-        f"timing.\n"
-        f"All subsequent output times are base on Actual times, plus "
-        f"correction for clock drift, where this is provided.\n"
-    )
 
     print("=" * 80)
     print("STATS FOR EACH TIME BIN:")
@@ -153,6 +156,10 @@ def generate_results(
         bin_padding = (tmptr_smth_fctr - 1) * logger.smpls_per_rec * 10
 
     bin_begin_ms = dt64_utils.delta64_to_ms(bin_begin_dt - raw_file.start_clk)
+    nom_tick_correction = raw_file.nom_tick_diff_ms * (
+        bin_begin_ms / raw_file.actl_file_tics_ms
+    )
+    bin_begin_ms = bin_begin_ms + nom_tick_correction
     bin_len_ms = dt64_utils.delta64_to_ms(bin_end_dt - bin_begin_dt)
     bin_end_ms = bin_begin_ms + bin_len_ms
 
@@ -163,7 +170,7 @@ def generate_results(
         padded_bin_begin_ms = bin_begin_ms - bin_padding
 
     padded_bin_len_ms = bin_end_ms - padded_bin_begin_ms + bin_padding
-    avail_bin_len_ms = raw_file.file_duration_ms - bin_begin_ms
+    avail_bin_len_ms = raw_file.nom_file_duration_ms - bin_begin_ms
     if (avail_bin_len_ms - padded_bin_len_ms) <= 0:
         padded_bin_len_ms = padded_bin_len_ms - bin_padding
 
@@ -189,10 +196,11 @@ def generate_results(
 
     # Assign names to column numbers of raw data array.
     # Note that raw data array columns are reverse order to raw binary.
-    last_field = len(logger.rec_fmt) - 1
-    pcore_col = last_field - logger.fmt_field["pcore"]
-    pn_col = last_field - logger.fmt_field["pn"]
-    tptr_col = last_field - logger.fmt_field["tptr"]
+    last_col = len(logger.rec_fmt) - 1
+    pcore_col = last_col - logger.fmt_field["pcore"]
+    pn_col = last_col - logger.fmt_field["pn"]
+    tptr_col = last_col - logger.fmt_field["tptr"]
+    tics_col = last_col - logger.fmt_field["tic"]
 
     # Create an array for each raw observable (pressure, temperature, ticks_ms)
     if pn_col > pcore_col:
@@ -202,7 +210,7 @@ def generate_results(
     press_raw = np.cumsum(press_raw, axis=1)
     press_raw = press_raw.reshape(num_rcrds_wanted * logger.smpls_per_rec)
     temp_raw = records[:, tptr_col]
-    ticks_ms = records[:, last_field - logger.fmt_field["tic"]]
+    ticks_ms = records[:, tics_col]
 
     actual_end_tick = ticks_ms[-1]
     actual_begin_tick = ticks_ms[0]
@@ -255,24 +263,13 @@ def generate_results(
         millisecs_p = nom_ticks_p
     else:
         beg_diff = nominal_begin_tick - actual_begin_tick
-        if beg_diff < 0:
-            dirn = "behind"
-        else:
-            dirn = "ahead"
-        print(
-            f"Nominal time at start of window is {abs(beg_diff)/1000} "
-            f"seconds {dirn} Actual recorded time ticks.",
-            flush=True,
-        )
         end_diff = nominal_end_tick - actual_end_tick
-        if end_diff < 0:
-            dirn = "behind"
-        else:
-            dirn = "ahead"
         print(
-            f"Nominal time at end of window is {abs(end_diff)/1000} "
-            f"seconds {dirn} Actual recorded time ticks.",
-            flush=True,
+            f"Nominal tick count difference at start of time bin (secs): "
+            f"{beg_diff/1000}\n"
+            f"Nominal tick count difference at end of time bin (secs):   "
+            f"{end_diff/1000}\n"
+            f"   (Precise - Nominal tick count)\n"
         )
 
         # Determine first tick count to achieve fixed period epochs.
@@ -316,7 +313,9 @@ def generate_results(
         logger.sample_epoch * round(drift_applied / logger.sample_epoch, 0)
     )
     print(
-        f"Clock drift applied to the extracted block:  {drift_applied} ms.",
+        f"Clock drift of precision time base applied to the time bin (sec): "
+        f"{drift_applied/1000}\n"
+        f"   (Precise tick count - drift = final time).\n",
         flush=True,
     )
     # Apply clock drift to time records.

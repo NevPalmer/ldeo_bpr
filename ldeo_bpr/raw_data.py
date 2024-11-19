@@ -23,7 +23,9 @@ class RawFile:
     end_clk: np.datetime64 = field(init=False)
     filesize_b: int = field(init=False)
     num_rcrds: int = field(init=False)
-    file_duration_ms: int = field(init=False)
+    nom_file_duration_ms: int = field(init=False)
+    actl_file_tics_ms: int = field(init=False)
+    nom_tick_diff_ms: int = field(init=False)
     clockdrift_ms: int = field(init=False)
 
     def __post_init__(self):
@@ -37,9 +39,39 @@ class RawFile:
         self.num_rcrds = (
             int((self.filesize_b - self.logger.head_len) / self.logger.rec_len) - 1
         )
-        self.file_duration_ms = self.num_rcrds * self.logger.record_epoch
-        self.end_clk = self.start_clk + np.timedelta64(self.file_duration_ms, "ms")
+        self.nom_file_duration_ms = self.num_rcrds * self.logger.record_epoch
+        self.actl_file_tics_ms = self._file_end_tic_count()
+        self.nom_tick_diff_ms = self.nom_file_duration_ms - self.actl_file_tics_ms
         self._clockdrift()
+        self.end_clk = self.start_clk + np.timedelta64(
+            self.actl_file_tics_ms - self.clockdrift_ms, "ms"
+        )
+
+    def _file_end_tic_count(self):
+        """Time tic value recorded at end of file.
+
+        Returns the actual recorded time tic value at end of file, corrected to
+        the beginning of the last record.
+        """
+        last_record = extract_records(
+            self.filename,
+            self.start_clk,
+            self.logger,
+            self.num_rcrds,
+            1,
+        )
+        last_col = len(self.logger.rec_fmt) - 1
+        tics_col = last_col - self.logger.fmt_field["tic"]
+        if self.logger.timing == "first":
+            first_tic = 0
+        elif self.logger.timing == "last":
+            first_tic = int((self.logger.smpls_per_rec - 1) * self.logger.sample_epoch)
+        else:
+            sys.exit(
+                f"Timing has not been correctly defined for the {self.logger.version} "
+                f"logger in the 'APGlogger.ini' file."
+            )
+        return first_tic + last_record[0, tics_col]
 
     def _clockdrift(self):
         """Calculates the clock drift using one of two methods.
@@ -57,7 +89,9 @@ class RawFile:
         if self.gpssync_dt is None:
             # No clock drift calculated, as no sync parameters provided.
             self.clockdrift_ms = None
-            self.gpssync_dt = self.end_clk
+            self.gpssync_dt = self.start_clk + np.timedelta64(
+                self.actl_file_tics_ms, "ms"
+            )
             return
 
         millisecs_logged = dt64_utils.delta64_to_ms(self.gpssync_dt - self.start_clk)
@@ -68,7 +102,7 @@ class RawFile:
             tick_rollover = 2**self.logger.tic_bit_len  # 1 tick = 1 millisecond
             millisecs_logged = millisecs_logged % tick_rollover
             # APG logger clock offset relative to GPS time (positive = APG > GPS)
-            self.clockdrift_ms = int(self.sync_tick_count - millisecs_logged)
+            self.clockdrift_ms = int(millisecs_logged - self.sync_tick_count)
             return
 
         # Calculate clock drift by detecting frequency injection.
@@ -84,6 +118,10 @@ class RawFile:
         # GPS sync time (gpssync_dt) is mid point of  window for sync.
         wndw_begin_ms = dt64_utils.delta64_to_ms(self.gpssync_dt - self.start_clk)
         wndw_begin_ms = wndw_begin_ms - sync_wndw_ms
+        nom_tick_correction = self.nom_tick_diff_ms * (
+            wndw_begin_ms / self.actl_file_tics_ms
+        )
+        wndw_begin_ms = wndw_begin_ms + nom_tick_correction
         start_rcrd = int(wndw_begin_ms / self.logger.record_epoch)
         num_rcrds_wanted = int(sync_wndw_ms * 2 / self.logger.record_epoch) + 1
 
@@ -270,6 +308,11 @@ def extract_records(
             first_tic = 0
         elif logger.timing == "last":
             first_tic = int((logger.smpls_per_rec - 1) * logger.sample_epoch)
+        else:
+            sys.exit(
+                f"Timing has not been correctly defined for the {logger.version} "
+                f"logger in the 'APGlogger.ini' file."
+            )
         last_field = len(logger.rec_fmt) - 1
         ticks_ms = records[:, last_field - logger.fmt_field["tic"]] - first_tic
 
