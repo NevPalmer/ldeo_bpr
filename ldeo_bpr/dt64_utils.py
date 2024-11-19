@@ -62,7 +62,7 @@ def dtstr_to_dt64(datetime_str: str) -> np.datetime64:
     return np.datetime64(pydt).astype("datetime64[ms]")
 
 
-def intvlstr_to_dt64(intvl_str: str) -> np.timedelta64:
+def intvlstr_to_delta64(intvl_str: str) -> np.timedelta64:
     """Convert a time interval string to a Numpy timedelta64.
 
     Format of string is "##[DHM]". Where ## is an integer and character

@@ -99,10 +99,11 @@ def main():
     wndw_beg_unix_ms = dt64_utils.dt64_to_ms(args.beginwndw)
     wndw_end_unix_ms = dt64_utils.dt64_to_ms(args.endwndw)
     bin_beg_ms = wndw_beg_unix_ms
-    if args.bininterval == 0:
+    bininterval_ms = dt64_utils.delta64_to_ms(args.bininterval)
+    if bininterval_ms == 0:
         bin_end_ms = wndw_end_unix_ms
     else:
-        bin_end_ms = bin_beg_ms - (bin_beg_ms % args.bininterval) + args.bininterval
+        bin_end_ms = bin_beg_ms - (bin_beg_ms % bininterval_ms) + bininterval_ms
     while bin_beg_ms < wndw_end_unix_ms:
         if bin_end_ms > wndw_end_unix_ms:
             bin_end_ms = wndw_end_unix_ms
@@ -129,7 +130,7 @@ def main():
         )
 
         bin_beg_ms = bin_end_ms
-        bin_end_ms = bin_beg_ms + args.bininterval
+        bin_end_ms = bin_beg_ms + bininterval_ms
 
 
 ###############################################################################

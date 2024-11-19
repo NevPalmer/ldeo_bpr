@@ -213,7 +213,7 @@ def processing_param_parser() -> None:
         'Format: "##[DHM]" where ## is an integer and '
         "character D, H or M indicates Days, Hours or "
         "Minutes.",
-        type=dt64_utils.intvlstr_to_dt64,
+        type=dt64_utils.intvlstr_to_delta64,
         default=np.timedelta64(0, "ms"),
     )
 
