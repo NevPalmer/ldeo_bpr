@@ -43,8 +43,12 @@ class RawFile:
         self.actl_file_tics_ms = self._file_end_tic_count()
         self.nom_tick_diff_ms = self.nom_file_duration_ms - self.actl_file_tics_ms
         self._clockdrift()
+        if not self.clockdrift_ms:
+            clockdrift_ms = 0
+        else:
+            clockdrift_ms = self.clockdrift_ms
         self.end_clk = self.start_clk + np.timedelta64(
-            self.actl_file_tics_ms - self.clockdrift_ms, "ms"
+            self.actl_file_tics_ms - clockdrift_ms, "ms"
         )
 
     def _file_end_tic_count(self):

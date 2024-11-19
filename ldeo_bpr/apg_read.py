@@ -55,24 +55,25 @@ def main():
         f"of sample epochs multiplied by the sample period "
         f"({logger.sample_epoch} millisecs).\n"
         f"For some APG loggers (eg CSAC) the Nominal and Precise tick counts are "
-        f"identical because they are both derived from the precision time base module.\n"
+        f"identical because they are both derived from the precision time base "
+        f"module.\n"
         f"For other loggers (eg Seascan) the Nominal timing is derived from an "
         f"imprecise PCB oscillator which drifts relative to the Precise "
         f"tick count. This 'Nominal' tick difference is corrected contuously in the "
         f"results by interpolating every record.\n"
-        f"Nominal tick count difference at end of recording (millisecs): "
+        f"Nominal tick count difference at end of recording (millisecs):         "
         f"{raw_file.nom_tick_diff_ms}\n"
-        f"   (Nominal tick counts - Precise)"
+        f"   (Nominal - Precise tick counts)"
     )
-    if raw_file.clockdrift_ms is None:
+    if not raw_file.clockdrift_ms:
         print(
             "No clock drift for precision time base has been calculated or applied.\n"
             "   Insufficient parameters supplied."
         )
     else:
         print(
-            f"Clock drift for precision time base at end of recording (millisecs): "
-            f":{raw_file.clockdrift_ms}\n"
+            f"Clock drift for precision time base at end of recording (millisecs):   "
+            f"{raw_file.clockdrift_ms}\n"
             f"   (Precise tick counts - actual GPS time)"
         )
 
@@ -265,11 +266,11 @@ def generate_results(
         beg_diff = nominal_begin_tick - actual_begin_tick
         end_diff = nominal_end_tick - actual_end_tick
         print(
-            f"Nominal tick count difference at start of time bin (secs): "
-            f"{beg_diff/1000}\n"
-            f"Nominal tick count difference at end of time bin (secs):   "
-            f"{end_diff/1000}\n"
-            f"   (Precise - Nominal tick count)\n"
+            f"Nominal tick count difference at start of time bin (millisecs):         "
+            f"{beg_diff}\n"
+            f"Nominal tick count difference at end of time bin (millisecs):           "
+            f"{end_diff}\n"
+            f"   (Nominal - Precise tick counts)\n"
         )
 
         # Determine first tick count to achieve fixed period epochs.
@@ -303,7 +304,7 @@ def generate_results(
     millisecs_logged = dt64_utils.delta64_to_ms(
         raw_file.gpssync_dt - raw_file.start_clk
     )
-    if raw_file.clockdrift_ms is None:
+    if not raw_file.clockdrift_ms:
         raw_file.clockdrift_ms = 0
     drift_beg = raw_file.clockdrift_ms * (millisecs_t[0] / millisecs_logged)
     drift_end = raw_file.clockdrift_ms * (millisecs_t[-1] / millisecs_logged)
@@ -313,8 +314,8 @@ def generate_results(
         logger.sample_epoch * round(drift_applied / logger.sample_epoch, 0)
     )
     print(
-        f"Clock drift of precision time base applied to the time bin (sec): "
-        f"{drift_applied/1000}\n"
+        f"Clock drift of precision time base applied to the time bin (millisecs): "
+        f"{drift_applied}\n"
         f"   (Precise tick count - drift = final time).\n",
         flush=True,
     )
