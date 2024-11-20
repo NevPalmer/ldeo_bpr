@@ -67,15 +67,15 @@ class RawFile:
         last_col = len(self.logger.rec_fmt) - 1
         tics_col = last_col - self.logger.fmt_field["tic"]
         if self.logger.timing == "first":
-            first_tic = 0
+            tick_possn = 0
         elif self.logger.timing == "last":
-            first_tic = int((self.logger.smpls_per_rec - 1) * self.logger.sample_epoch)
+            tick_possn = int((self.logger.smpls_per_rec - 1) * self.logger.sample_epoch)
         else:
             sys.exit(
                 f"Timing has not been correctly defined for the {self.logger.version} "
                 f"logger in the 'APGlogger.ini' file."
             )
-        return first_tic + last_record[0, tics_col]
+        return tick_possn + last_record[0, tics_col]
 
     def _clockdrift(self):
         """Calculates the clock drift using one of two methods.
@@ -309,19 +309,18 @@ def extract_records(
         # Shift the tick count if necessary, so that it relates to the first
         # sample in each record (instead of the last).
         if logger.timing == "first":
-            first_tic = 0
+            tick_possn = 0
         elif logger.timing == "last":
-            first_tic = int((logger.smpls_per_rec - 1) * logger.sample_epoch)
+            tick_possn = int((logger.smpls_per_rec - 1) * logger.sample_epoch)
         else:
             sys.exit(
                 f"Timing has not been correctly defined for the {logger.version} "
                 f"logger in the 'APGlogger.ini' file."
             )
         last_field = len(logger.rec_fmt) - 1
-        ticks_ms = records[:, last_field - logger.fmt_field["tic"]] - first_tic
+        ticks_ms = records[:, last_field - logger.fmt_field["tic"]] - tick_possn
 
-        nominal_begin_tick = start_rcrd * logger.record_epoch
-        # print(f'Tick field length (in bits): {tic_field_len}')
+        nominal_first_tick = start_rcrd * logger.record_epoch
 
         # If time tick values are not pressent then populate tick values with
         # assumed nominal tick count.
@@ -333,19 +332,19 @@ def extract_records(
                 "clock are not available!"
             )
             record_epoch = logger.sample_epoch * logger.smpls_per_rec
-            stop = nominal_begin_tick + (ticks_ms.size) * record_epoch
-            ticks_ms = np.arange(nominal_begin_tick, stop, record_epoch)
+            stop = nominal_first_tick + (ticks_ms.size) * record_epoch
+            ticks_ms = np.arange(nominal_first_tick, stop, record_epoch)
             records[:, last_field - logger.fmt_field["tic"]] = ticks_ms
             return records
 
         # Remove tick count rollovers and make actual ticks continuously
         # increasing.
         rollover_period = 2**logger.tic_bit_len  # in millisec
-        # print(f'Rollover length (in millisec/ticks): {rollover_period}')
+
         # The number of rollovers prior to the beginning of the specified data
         # window.
-        nom_rollovers_begin = int(nominal_begin_tick / rollover_period)
-        nom_rollover_balance = nominal_begin_tick % rollover_period
+        nom_rollovers_begin = int(nominal_first_tick / rollover_period)
+        nom_rollover_balance = nominal_first_tick % rollover_period
         # Does the nominal rollover count of the first record align with the
         # actual count. (Within 1e7 millisec or approx 166 minutes.)
         if abs(ticks_ms[0] - nom_rollover_balance) < 1e7:

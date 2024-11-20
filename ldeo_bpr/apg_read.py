@@ -158,12 +158,16 @@ def generate_results(
         bin_padding = (tmptr_smth_fctr - 1) * logger.smpls_per_rec * 10
 
     bin_begin_ms = dt64_utils.delta64_to_ms(bin_begin_dt - raw_file.start_clk)
+    bin_len_ms = dt64_utils.delta64_to_ms(bin_end_dt - bin_begin_dt)
+    bin_end_ms = bin_begin_ms + bin_len_ms
     nom_tick_correction = raw_file.nom_tick_diff_ms * (
         bin_begin_ms / raw_file.actl_file_tics_ms
     )
     bin_begin_ms = bin_begin_ms + nom_tick_correction
-    bin_len_ms = dt64_utils.delta64_to_ms(bin_end_dt - bin_begin_dt)
-    bin_end_ms = bin_begin_ms + bin_len_ms
+    nom_tick_correction = raw_file.nom_tick_diff_ms * (
+        bin_end_ms / raw_file.actl_file_tics_ms
+    )
+    bin_end_ms = bin_end_ms + nom_tick_correction
 
     # Make sure the requested times don't fall outside available records.
     if (bin_begin_ms - bin_padding) < 0:
@@ -523,7 +527,6 @@ def generate_results(
         temperature_out = temperature_upsmpld
 
     # Trim results to the originally specified time bin.
-    bin_end_ms = bin_begin_ms + bin_len_ms
     mask = np.logical_and(time >= bin_begin_ms, time < bin_end_ms)
     time = time[mask]
     pressure_out = pressure_out[mask]
@@ -553,7 +556,6 @@ def generate_results(
     # Save results to MiniSEED file
     if mseed_path:
         # Trim results to the originally specified time bin.
-        bin_end_ms = bin_begin_ms + bin_len_ms
         mask = np.logical_and(millisecs_p >= bin_begin_ms, millisecs_p < bin_end_ms)
         pressure_mseed = pressure[mask]
         mask = np.logical_and(millisecs_t >= bin_begin_ms, millisecs_t < bin_end_ms)
