@@ -607,49 +607,65 @@ def generate_results(
 
     # Generate and output a plot
     if plot_flags["format"] != "n":
-        # Set min-max values for plot Y-axes
         print("Generating plot.", flush=True)
-        p_min = np.min(pressure_out)
-        p_max = np.max(pressure_out)
-        p_range = p_max - p_min
-        if p_range == 0:
-            intvl = 10
-        else:
-            int_log = int(np.log10(p_range))
-            if 10**int_log / p_range >= 0.5:
-                intvl = 10**int_log / 10
-            elif 10**int_log / p_range >= 0.2:
-                intvl = 10**int_log / 5
-            elif 10**int_log / p_range >= 0.1:
-                intvl = 10**int_log / 2
-            else:
-                intvl = 10**int_log
-        p_min = p_min - p_min % intvl - intvl
-        p_max = p_max - p_max % intvl + 2 * intvl
+        p_kpa = pressure_out / 1000
+        ## Set min-max values for plot Y-axes
+        ## Uncomment below to plot full range of data.
+        # p_min = np.min(p_kpa)
+        # p_max = np.max(p_kpa)
+        # p_range = p_max - p_min
 
-        t_min = np.min(temperature_out)
-        t_max = np.max(temperature_out)
-        t_range = t_max - t_min
-        if t_range == 0:
-            intvl = 0.1
-        else:
-            int_log = int(np.log10(t_range))
-            if 10**int_log / t_range >= 0.5:
-                intvl = 10**int_log / 10
-            elif 10**int_log / t_range >= 0.2:
-                intvl = 10**int_log / 5
-            elif 10**int_log / t_range >= 0.1:
-                intvl = 10**int_log / 2
-            else:
-                intvl = 10**int_log
-        t_min = t_min - t_min % intvl - intvl
-        t_max = t_max - t_max % intvl + 2 * intvl
+        # if p_range == 0:
+        #     intvl = 10
+        # else:
+        #     int_log = int(np.log10(p_range))
+        #     if 10**int_log / p_range >= 0.5:
+        #         intvl = 10**int_log / 10
+        #     elif 10**int_log / p_range >= 0.2:
+        #         intvl = 10**int_log / 5
+        #     elif 10**int_log / p_range >= 0.1:
+        #         intvl = 10**int_log / 2
+        #     else:
+        #         intvl = 10**int_log
+        # p_min = p_min - p_min % intvl - intvl
+        # p_max = p_max - p_max % intvl + 2 * intvl
+
+        # t_min = np.min(temperature_out)
+        # t_max = np.max(temperature_out)
+        # t_range = t_max - t_min
+        # if t_range == 0:
+        #     intvl = 0.1
+        # else:
+        #     int_log = int(np.log10(t_range))
+        #     if 10**int_log / t_range >= 0.5:
+        #         intvl = 10**int_log / 10
+        #     elif 10**int_log / t_range >= 0.2:
+        #         intvl = 10**int_log / 5
+        #     elif 10**int_log / t_range >= 0.1:
+        #         intvl = 10**int_log / 2
+        #     else:
+        #         intvl = 10**int_log
+        # t_min = t_min - t_min % intvl - intvl
+        # t_max = t_max - t_max % intvl + 2 * intvl
+
+        ## Uncomment below to plot specified range of data about the mean.
+        p_median = np.median(p_kpa)
+        # pres_median = 22270
+        p_spread = 20
+        p_min = p_median - (p_spread / 2)
+        p_max = p_median + (p_spread / 2)
+
+        t_median = np.median(temperature_out)
+        # tptr_median = 5.7
+        t_spread = 1
+        t_min = t_median - (t_spread / 2)
+        t_max = t_median + (t_spread / 2)
 
         # Plot Results
-        fig, ax2 = plt.subplots(figsize=(15, 9))
+        fig, ax1 = plt.subplots(figsize=(15, 9))
+        plt.ylim(p_max, p_min)
+        ax2 = ax1.twinx()
         plt.ylim(t_min, t_max)
-        ax1 = ax2.twinx()
-        plt.ylim(p_min, p_max)
 
         # Plot raw pressure values if requested
         if plot_flags["format"] == "r":
@@ -659,7 +675,7 @@ def generate_results(
                 time_p = millisecs_p / 1000
             ax1.plot(
                 time_p,
-                pressure_raw,
+                pressure_raw / 1000,
                 color="pink",
                 marker=".",
                 markersize=1.0,
@@ -683,12 +699,12 @@ def generate_results(
 
         # Plot final pressure values
         color = "red"
-        ax1.set_ylabel("Pressure (Pa)", color=color)
+        ax1.set_ylabel("Pressure (kPa)", color=color)
         ax1.tick_params(axis="y", labelcolor=color)
         ax1.grid(axis="x")
         ax1.plot(
             time,
-            pressure_out,
+            p_kpa,
             color=color,
             marker=".",
             markersize=1.0,
