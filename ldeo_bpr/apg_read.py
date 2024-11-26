@@ -160,14 +160,24 @@ def generate_results(
     bin_begin_ms = dt64_utils.delta64_to_ms(bin_begin_dt - raw_file.start_clk)
     bin_len_ms = dt64_utils.delta64_to_ms(bin_end_dt - bin_begin_dt)
     bin_end_ms = bin_begin_ms + bin_len_ms
-    nom_tick_correction = raw_file.nom_tick_diff_ms * (
-        bin_begin_ms / raw_file.actl_file_tics_ms
+    if raw_file.clockdrift_ms:
+        clockdrift_ms = raw_file.clockdrift_ms
+    else:
+        clockdrift_ms = 0
+    nom_tick_correction = np.floor(
+        raw_file.nom_tick_diff_ms * (bin_begin_ms / raw_file.actl_file_tics_ms)
     )
-    bin_begin_ms = bin_begin_ms + nom_tick_correction
-    nom_tick_correction = raw_file.nom_tick_diff_ms * (
-        bin_end_ms / raw_file.actl_file_tics_ms
+    drift_correction = np.floor(
+        clockdrift_ms * (bin_begin_ms / raw_file.actl_file_tics_ms)
     )
-    bin_end_ms = bin_end_ms + nom_tick_correction
+    bin_begin_ms = bin_begin_ms + nom_tick_correction + drift_correction
+    nom_tick_correction = np.ceil(
+        raw_file.nom_tick_diff_ms * (bin_end_ms / raw_file.actl_file_tics_ms)
+    )
+    drift_correction = np.ceil(
+        clockdrift_ms * (bin_begin_ms / raw_file.actl_file_tics_ms)
+    )
+    bin_end_ms = bin_end_ms + nom_tick_correction + drift_correction
 
     # Make sure the requested times don't fall outside available records.
     if (bin_begin_ms - bin_padding) < 0:
