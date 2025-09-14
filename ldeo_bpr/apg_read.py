@@ -153,7 +153,7 @@ def generate_results(
     """This is the primary function used to extract and output results."""
     # Calculate window for extracting data.
     if noisefilt:
-        bin_padding = 1_000_000  # milliseconds
+        bin_padding = 2_500_000  # milliseconds
     else:
         bin_padding = (tmptr_smth_fctr - 1) * logger.smpls_per_rec * 10
 
@@ -351,6 +351,7 @@ def generate_results(
     # tmptr_period_usec.fill(5.7530) #Fixed temp of +2.27°C for Paros 140338
     # tmptr_period_usec.fill(5.8475) #Fixed temp of +2.55°C for Paros 136309
     # tmptr_period_usec.fill(5.8430) #Fixed temp of +20.08°C for Paros 136309
+    # tmptr_period_usec.fill(5.78714) #Fixed temp of +5.71°C for Paros 150181
 
     # Pressure period (usec)
     presr_period_usec = (press_raw / (logger.pp_fctr) + logger.pp_cnst) / (
@@ -376,8 +377,18 @@ def generate_results(
             mask_data=temperature_del,
             millisecs=millisecs_t_del,
             millisecs_all=millisecs_t,
-            bin_size=1_000_000,
-            tolerance=0.02,
+            bin_size=2_500_000,
+            tolerance=0.125,
+        )
+        coef_uv_filt = tmptr_period_usec_filt - paros.u[0]
+        temperature_filt = np.polyval(paros.y, coef_uv_filt)
+        tmptr_period_usec_filt, millisecs_filt = remove_noise_meddiff(
+            raw_data=tmptr_period_usec_filt,
+            mask_data=temperature_filt,
+            millisecs=millisecs_filt,
+            millisecs_all=millisecs_t,
+            bin_size=500_000,
+            tolerance=0.025,
         )
         coef_uv_filt = tmptr_period_usec_filt - paros.u[0]
         temperature_filt = np.polyval(paros.y, coef_uv_filt)
@@ -437,14 +448,24 @@ def generate_results(
             mask_data=pressure_del,
             millisecs=millisecs_del,
             millisecs_all=millisecs_p,
-            bin_size=10_000,
-            tolerance=50,
+            bin_size=2_500_000,
+            tolerance=200,
         )
 
         # Uncomment line below to plot first iteration pressure instead of raw pressure.
         # pressure_raw = pressure
 
         # Second iteration noise removal with tighter tollerances
+        pressure_filt, millisecs_filt = remove_noise_meddiff(
+            raw_data=pressure_filt,
+            mask_data=pressure_filt,
+            millisecs=millisecs_filt,
+            millisecs_all=millisecs_p,
+            bin_size=10_000,
+            tolerance=50,
+        )
+
+        # Third iteration noise removal with tighter tollerances
         pressure_filt, millisecs_filt = remove_noise_meddiff(
             raw_data=pressure_filt,
             mask_data=pressure_filt,
@@ -728,7 +749,7 @@ def generate_results(
         )
 
         fig.suptitle(
-            f"{raw_file.filename}\nBegin: {bin_begin_dt}  -  " f"End: {bin_end_dt}"
+            f"{raw_file.filename}\nBegin: {bin_begin_dt}  -  End: {bin_end_dt}"
         )
         plt.tight_layout()
         if time_format == "d":
