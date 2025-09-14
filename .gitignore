@@ -1,9 +1,11 @@
 __pycache__
 *.egg-info
+ldeo_matlab_scripts/
 temp/
 logs/
 data/
 working/
+
 temp*
 working*
 unittest*

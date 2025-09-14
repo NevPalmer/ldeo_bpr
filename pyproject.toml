@@ -33,6 +33,7 @@ keywords = ["bpr", "apg", "obp", "absolute pressure", "seafloor"]
 [project.scripts]
 apg_read = "ldeo_bpr.apg_read:main"
 apg_read_serial = "ldeo_bpr.apg_read_serial:main"
+plot_bpr_csv = "ldeo_bpr.plot_bpr_csv:main"
 
 
 [tool.setuptools]
