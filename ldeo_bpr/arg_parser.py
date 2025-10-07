@@ -248,6 +248,18 @@ def processing_param_parser() -> None:
         default=False,
     )
 
+    parser.add_argument(
+        "--bitshift",
+        help="Checks the begining of each record to identify if it has been"
+        "incorrectly bit shifted to the left. Compares the expected time tick"
+        "with the recorded time tick and shifts to the right, adding the "
+        "expected digits, until the time stamp matches the expected value.\n"
+        "(Only works for CSAC loggers where expected and actual time ticks should "
+        "match.)",
+        action="store_true",
+        default=False,
+    )
+
     return parser
 
 

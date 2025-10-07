@@ -123,6 +123,7 @@ def main():
             args.decimate,
             args.tempsmth,
             args.noisefilt,
+            args.bitshift,
             args.fmttime,
             args.plot,
             args.outfile,
@@ -145,6 +146,7 @@ def generate_results(
     decmt_intvl,
     tmptr_smth_fctr,
     noisefilt,
+    bitshift,
     time_format,
     plot_flags,
     out_filename: Path,
@@ -202,6 +204,7 @@ def generate_results(
         logger,
         start_rcrd,
         num_rcrds_wanted,
+        bitshift,
     )
 
     # Save raw records to file as integers with tick rollover removed.
@@ -351,7 +354,8 @@ def generate_results(
     # tmptr_period_usec.fill(5.7530) #Fixed temp of +2.27°C for Paros 140338
     # tmptr_period_usec.fill(5.8475) #Fixed temp of +2.55°C for Paros 136309
     # tmptr_period_usec.fill(5.8430) #Fixed temp of +20.08°C for Paros 136309
-    # tmptr_period_usec.fill(5.78714) #Fixed temp of +5.71°C for Paros 150181
+    # tmptr_period_usec.fill(5.78714)  # Fixed temp of +5.71°C for Paros 150181
+    # tmptr_period_usec.fill(5.822)  # Fixed temp of +29.2°C for Paros 150337
 
     # Pressure period (usec)
     presr_period_usec = (press_raw / (logger.pp_fctr) + logger.pp_cnst) / (
@@ -784,24 +788,28 @@ def remove_noise_meddiff(
     """
     bins = int((millisecs_all.max() - millisecs_all.min()) / bin_size)
     try:
-        binned_tptr, bin_edges, _ = stat.binned_statistic(
+        binned_data, bin_edges, _ = stat.binned_statistic(
             millisecs, mask_data, "median", bins
         )
     except ValueError as err:
-        sys.exit(
-            f"The data window or bin selected is too short for the filter "
-            f"parameters currently specified in the script. Either select "
-            f"a longer data sample or edit the 'remove_noise_meddiff' "
-            f"filter in module 'apg_read.py'. Exiting...\nError msg: {err}"
+        print(
+            "The data window or bin selected is too short for the filter "
+            "parameters currently specified in the script, or there is "
+            "insufficient usable remianing after filtering. Try selecting "
+            "a longer data sample or edit the bin size of 'remove_noise_meddiff' "
+            "filter in module 'apg_read.py'. Raw filtered data has been "
+            "processed as zeros."
         )
+        raw_data = millisecs_all.copy()
+        raw_data.fill(0.0)
+        return raw_data, millisecs_all
     bin_centers = (bin_edges[1:] + bin_edges[:-1]) / 2
-    tptr_medsmth = np.interp(millisecs, bin_centers, binned_tptr)
+    tptr_medsmth = np.interp(millisecs, bin_centers, binned_data)
     difference = np.abs(mask_data - tptr_medsmth)
     mask = np.where(difference > tolerance)
     raw_data = np.delete(raw_data, mask)
     millisecs = np.delete(millisecs, mask)
     return raw_data, millisecs
-    # return np.interp(millisecs_all, millisecs, raw_data)
 
 
 ###############################################################################

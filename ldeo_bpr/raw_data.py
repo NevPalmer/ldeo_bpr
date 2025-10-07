@@ -62,7 +62,8 @@ class RawFile:
             self.start_clk,
             self.logger,
             self.num_rcrds,
-            1,
+            num_rcrds_wanted=1,
+            bitshift=0,
         )
         last_col = len(self.logger.rec_fmt) - 1
         tics_col = last_col - self.logger.fmt_field["tic"]
@@ -202,7 +203,7 @@ class RawFile:
             sys.exit(
                 f"Unable to determine clock drift.\n"
                 f"The raw data in during the period {self.gpssync_dt} "
-                f"+/-{sync_wndw_ms/1000} seconds does not contain "
+                f"+/-{sync_wndw_ms / 1000} seconds does not contain "
                 f"a frequency injection for syncing to."
             )
 
@@ -226,12 +227,42 @@ class RawFile:
         return
 
 
+def _bit_shift_correct(
+    record_int: int,
+    rcrd_number: int,
+    logger: Logger,
+) -> int:
+    # Read right most bit_len bits
+    tic_len = logger.tic_bit_len
+    rcrd_len = logger.rec_len * 8
+    expected_tic = (rcrd_number) * logger.record_epoch
+    expected_tic = expected_tic % 2**tic_len
+    # print(f"{rcrd_number=}\n")
+    tic_field = record_int >> (rcrd_len - tic_len)
+    for bit_shift in range(0, logger.tic_bit_len):
+        mask = 2**tic_len - 1 >> bit_shift
+        expected_tic_shifted = expected_tic & mask
+        # print(f"{bin(expected_tic_shifted)=}")
+        tic_field_shifted = tic_field >> bit_shift
+        # print(f"{bin(tic_field_shifted)=   }\n")
+        if expected_tic_shifted == tic_field_shifted:
+            tic_prefix = expected_tic & ~mask
+            tic_prefix = tic_prefix << (rcrd_len - tic_len)
+            record_shifted = record_int >> bit_shift
+            final_record = tic_prefix | record_shifted
+            # print(f"{bin(final_record)=}\n")
+            return final_record
+    else:
+        sys.exit("No shifted tic match found!\n")
+
+
 def extract_records(
     raw_filename: Path,
     file_start_clk: np.datetime64,
     logger: Logger,
     start_rcrd: int,
     num_rcrds_wanted: int,
+    bitshift,
 ):
     """Extracts binary records from a raw APG data logger file."""
     if const.TROUBLE_SHOOT["binary_out"]:
@@ -247,7 +278,7 @@ def extract_records(
         begin_byte = logger.head_len + start_rcrd * logger.rec_len
         apgfile.seek(begin_byte, 0)
         records = []
-        for i in range(0, num_rcrds_wanted):
+        for rcrd_count in range(0, num_rcrds_wanted):
             binary_record = apgfile.read(logger.rec_len)
 
             # Print record as a string of Binary values to file.
@@ -276,6 +307,16 @@ def extract_records(
             # by logger['rec_fmt'] .
             record_int = int.from_bytes(binary_record, byteorder="big", signed=False)
             record = []
+
+            if bitshift:
+                # Check each record of samples if it was recorded bit shifted to the left
+                # by a random number of bits by comparing the recorded time tic with the
+                # expected time tick for that record. Correct by bitshifting back to the
+                # right and insert expected missing binary digits.
+                record_int = _bit_shift_correct(
+                    record_int, start_rcrd + rcrd_count, logger
+                )
+
             for signed_bit_len in reversed(logger.rec_fmt):
                 bit_len = int(abs(signed_bit_len))
                 # Read right most bit_len bits
@@ -294,7 +335,7 @@ def extract_records(
 
             records.append(record)
             # Print a "." every 10000 records to indicate script is running.
-            if i % 10000 == 0:
+            if rcrd_count % 10000 == 0:
                 print(".", end="", flush=True)
         print()
 
@@ -414,7 +455,7 @@ def extract_records(
                     rollover_dt = file_start_clk + np.timedelta64(
                         ticks_ms[rollover], "ms"
                     )
-                    print(f"A time tick rollover occurred at " f"{rollover_dt}.")
+                    print(f"A time tick rollover occurred at {rollover_dt}.")
     records[:, last_field - logger.fmt_field["tic"]] = ticks_ms
 
     return records
