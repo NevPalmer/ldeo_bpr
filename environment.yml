@@ -3,6 +3,7 @@ dependencies:
   - python >=3.9
   - matplotlib >=3.3
   - numpy >=1.22
+  - pandas >=2.2
   - obspy >=1.4
   - pyserial >=3.5
   - scipy >=1.7
