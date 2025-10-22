@@ -137,6 +137,7 @@ class RawFile:
                 self.logger,
                 start_rcrd,
                 num_rcrds_wanted,
+                bitshift=False,
             )
         except OSError as err:
             sys.exit(
