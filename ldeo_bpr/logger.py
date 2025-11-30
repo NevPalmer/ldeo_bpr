@@ -12,21 +12,21 @@ from ldeo_bpr.math_utils import eval_exponent_str
 class Logger:
     """Class for LDEO BPR data loggers.."""
 
-    version: str = None
-    head_len: int = None
-    rec_len: int = None
-    smpls_per_rec: int = None
-    sample_epoch: int = None
-    record_epoch: int = None
-    clock_freq: int = None
-    tp_fctr: int = None
-    tp_cnst: int = None
-    pp_fctr: int = None
-    pp_cnst: int = None
-    timing: str = None
-    rec_fmt: tuple[int] = None
-    fmt_field: dict[str, int] = None
-    tic_bit_len: int = None
+    version: str
+    head_len: int
+    rec_len: int
+    smpls_per_rec: int
+    sample_epoch: int
+    record_epoch: int
+    clock_freq: int
+    tp_fctr: int
+    tp_cnst: int
+    pp_fctr: int
+    pp_cnst: int
+    timing: str
+    rec_fmt: tuple[int, ...]
+    fmt_field: dict[str, int]
+    tic_bit_len: int
 
     @classmethod
     def from_file(cls, filename: str, logger_version: str):

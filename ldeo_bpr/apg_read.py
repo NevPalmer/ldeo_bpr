@@ -27,14 +27,16 @@ def main():
     logger = Logger.from_file(
         filename=args.loggerini, logger_version=args.loggerversion
     )
-
     # Create a BPR raw data file object.
     raw_file = raw_data.RawFile(
         filename=args.infile,
         logger=logger,
+        paros=paros,
         start_clk=args.clkstart,
         gpssync_dt=args.gpssynctime,
         sync_tick_count=args.synctickcount,
+        bitshift=args.bitshift,
+        ignore_tics=args.ignoreticks,
     )
 
     print("=" * 80)
@@ -199,12 +201,9 @@ def generate_results(
     print("Extracting raw records:\n", end="")
 
     records = raw_data.extract_records(
-        raw_file.filename,
-        raw_file.start_clk,
-        logger,
+        raw_file,
         start_rcrd,
         num_rcrds_wanted,
-        bitshift,
     )
 
     # Save raw records to file as integers with tick rollover removed.
@@ -317,20 +316,23 @@ def generate_results(
         press_raw = np.interp(millisecs_p, ticks_p, press_raw)
 
     # Apply clock drift to time values
-    # Clock drift is fixed at the mid-point of the period of extracted data
-    # and any change is assumed to be insignificant over that period.
-    millisecs_logged = dt64_utils.delta64_to_ms(
-        raw_file.gpssync_dt - raw_file.start_clk
-    )
     if not raw_file.clockdrift_ms:
         raw_file.clockdrift_ms = 0
-    drift_beg = raw_file.clockdrift_ms * (millisecs_t[0] / millisecs_logged)
-    drift_end = raw_file.clockdrift_ms * (millisecs_t[-1] / millisecs_logged)
-    drift_applied = (drift_beg + drift_end) / 2
-    # Round the drift to be applied to the  nearest whole sample epoch.
-    drift_applied = int(
-        logger.sample_epoch * round(drift_applied / logger.sample_epoch, 0)
-    )
+        drift_applied = 0
+    else:
+        # Clock drift is fixed at the mid-point of the period of extracted data
+        # and any change is assumed to be insignificant over that period.
+        millisecs_logged = dt64_utils.delta64_to_ms(
+        raw_file.gpssync_dt - raw_file.start_clk
+        )
+        drift_beg = raw_file.clockdrift_ms * (millisecs_t[0] / millisecs_logged)
+        drift_end = raw_file.clockdrift_ms * (millisecs_t[-1] / millisecs_logged)
+        drift_applied = (drift_beg + drift_end) / 2
+        # Round the drift to be applied to the  nearest whole sample epoch.
+        drift_applied = int(
+            logger.sample_epoch * round(drift_applied / logger.sample_epoch, 0)
+        )
+
     print(
         f"Clock drift of precision time base applied to the time bin (millisecs): "
         f"{drift_applied}\n"
@@ -363,7 +365,7 @@ def generate_results(
     )
 
     tmptr_period_usec_raw = tmptr_period_usec
-    coef_uv_raw = tmptr_period_usec_raw - paros.u[0]
+    coef_uv_raw = tmptr_period_usec_raw - paros.u
     temperature_raw = np.polyval(paros.y, coef_uv_raw)
 
     if noisefilt:
@@ -384,7 +386,7 @@ def generate_results(
             bin_size=2_500_000,
             tolerance=0.125,
         )
-        coef_uv_filt = tmptr_period_usec_filt - paros.u[0]
+        coef_uv_filt = tmptr_period_usec_filt - paros.u
         temperature_filt = np.polyval(paros.y, coef_uv_filt)
         tmptr_period_usec_filt, millisecs_filt = remove_noise_meddiff(
             raw_data=tmptr_period_usec_filt,
@@ -394,7 +396,7 @@ def generate_results(
             bin_size=500_000,
             tolerance=0.025,
         )
-        coef_uv_filt = tmptr_period_usec_filt - paros.u[0]
+        coef_uv_filt = tmptr_period_usec_filt - paros.u
         temperature_filt = np.polyval(paros.y, coef_uv_filt)
         tmptr_period_usec_filt, millisecs_filt = remove_noise_meddiff(
             raw_data=tmptr_period_usec_filt,
@@ -418,7 +420,7 @@ def generate_results(
 
     # Calculate temperature array
     print("Calculating temperatures and pressures.", flush=True)
-    coef_uv = tmptr_period_usec - paros.u[0]
+    coef_uv = tmptr_period_usec - paros.u
     # Upsample temperatures to match frequency of pressure samples by
     #  linear interpolation.
     coef_uv_expnd = np.interp(millisecs_p, millisecs_t, coef_uv)
@@ -633,7 +635,7 @@ def generate_results(
     # Generate and output a plot
     if plot_flags["format"] != "n":
         print("Generating plot.", flush=True)
-        p_kpa = pressure_out / 1000
+        p_kpa = np.divide(pressure_out, 1000)
         ## Set min-max values for plot Y-axes
         ## Uncomment below to plot full range of data.
         # p_min = np.min(p_kpa)
@@ -791,7 +793,7 @@ def remove_noise_meddiff(
         binned_data, bin_edges, _ = stat.binned_statistic(
             millisecs, mask_data, "median", bins
         )
-    except ValueError as err:
+    except ValueError:
         print(
             "The data window or bin selected is too short for the filter "
             "parameters currently specified in the script, or there is "

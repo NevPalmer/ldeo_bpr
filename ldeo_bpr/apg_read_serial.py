@@ -88,7 +88,7 @@ def main():
                     ) / (logger.clock_freq)
 
                     # Create temperature
-                    coef_uv = tmptr_period_usec - paros.u[0]
+                    coef_uv = tmptr_period_usec - paros.u
                     temperature = np.polyval(paros.y, coef_uv)
 
                     # Create pressure

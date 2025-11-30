@@ -34,10 +34,6 @@ def main():  # noqa: D103
     args = parser.parse_args()
     filename = args.infile
 
-    csv_datatypes = {
-        "Pressure": "float",
-        "Temperature": "float",
-    }
     df = pd.read_csv(
         filename,
         header=None,
@@ -45,7 +41,10 @@ def main():  # noqa: D103
         # nrows=86_000,
         names=("Time", "Pressure", "Temperature"),
         parse_dates=["Time"],
-        dtype=csv_datatypes,
+        dtype={
+            "Pressure": "float",
+            "Temperature": "float",
+        },
     )
     time = df["Time"]
     pressure_kpa = df["Pressure"] / 1000

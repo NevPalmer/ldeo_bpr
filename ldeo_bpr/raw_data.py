@@ -9,6 +9,7 @@ import numpy as np
 from . import constants as const
 from . import dt64_utils
 from .logger import Logger
+from .paros import Paros
 
 
 @dataclass(frozen=False)
@@ -17,16 +18,19 @@ class RawFile:
 
     filename: Path
     logger: Logger
+    paros: Paros
     start_clk: np.datetime64
-    gpssync_dt: np.datetime64 = None
-    sync_tick_count: int = None
+    gpssync_dt: np.datetime64
+    sync_tick_count: int|None = None
+    ignore_tics: bool = False
+    bitshift: bool = False
     end_clk: np.datetime64 = field(init=False)
     filesize_b: int = field(init=False)
     num_rcrds: int = field(init=False)
     nom_file_duration_ms: int = field(init=False)
     actl_file_tics_ms: int = field(init=False)
     nom_tick_diff_ms: int = field(init=False)
-    clockdrift_ms: int = field(init=False)
+    clockdrift_ms: int|None = field(init=False)
 
     def __post_init__(self):
         """Generate calculated attributes."""
@@ -58,12 +62,9 @@ class RawFile:
         the beginning of the last record.
         """
         last_record = extract_records(
-            self.filename,
-            self.start_clk,
-            self.logger,
+            self,
             self.num_rcrds,
             num_rcrds_wanted=1,
-            bitshift=0,
         )
         last_col = len(self.logger.rec_fmt) - 1
         tics_col = last_col - self.logger.fmt_field["tic"]
@@ -132,12 +133,9 @@ class RawFile:
 
         try:
             sync_records = extract_records(
-                self.filename,
-                self.start_clk,
-                self.logger,
+                self,
                 start_rcrd,
                 num_rcrds_wanted,
-                bitshift=False,
             )
         except OSError as err:
             sys.exit(
@@ -229,18 +227,18 @@ class RawFile:
 
 
 def _bit_shift_correct(
+    self,
     record_int: int,
     rcrd_number: int,
-    logger: Logger,
 ) -> int:
     # Read right most bit_len bits
-    tic_len = logger.tic_bit_len
-    rcrd_len = logger.rec_len * 8
-    expected_tic = (rcrd_number) * logger.record_epoch
+    tic_len = self.logger.tic_bit_len
+    rcrd_len = self.logger.rec_len * 8
+    expected_tic = (rcrd_number) * self.logger.record_epoch
     expected_tic = expected_tic % 2**tic_len
     # print(f"{rcrd_number=}\n")
     tic_field = record_int >> (rcrd_len - tic_len)
-    for bit_shift in range(0, logger.tic_bit_len):
+    for bit_shift in range(0, self.logger.tic_bit_len):
         mask = 2**tic_len - 1 >> bit_shift
         expected_tic_shifted = expected_tic & mask
         # print(f"{bin(expected_tic_shifted)=}")
@@ -258,12 +256,9 @@ def _bit_shift_correct(
 
 
 def extract_records(
-    raw_filename: Path,
-    file_start_clk: np.datetime64,
-    logger: Logger,
+    self,
     start_rcrd: int,
     num_rcrds_wanted: int,
-    bitshift,
 ):
     """Extracts binary records from a raw APG data logger file."""
     if const.TROUBLE_SHOOT["binary_out"]:
@@ -275,19 +270,19 @@ def extract_records(
         # Create empty file, overwrite if exists.
         open(hex_filename, "w", encoding="utf8").close()
 
-    with open(raw_filename, "rb") as apgfile:
-        begin_byte = logger.head_len + start_rcrd * logger.rec_len
+    with open(self.filename, "rb") as apgfile:
+        begin_byte = self.logger.head_len + start_rcrd * self.logger.rec_len
         apgfile.seek(begin_byte, 0)
         records = []
         for rcrd_count in range(0, num_rcrds_wanted):
-            binary_record = apgfile.read(logger.rec_len)
+            binary_record = apgfile.read(self.logger.rec_len)
 
             # Print record as a string of Binary values to file.
             if const.TROUBLE_SHOOT["binary_out"]:
                 bin_str = ""
                 for ch in binary_record:
                     bin_str += f"{ch:08b}"
-                cum_rec_fmt = np.cumsum(list(map(abs, logger.rec_fmt)))
+                cum_rec_fmt = np.cumsum(list(map(abs, self.logger.rec_fmt)))
                 bin_str_dlmtd = ""
                 for count, char in enumerate(bin_str):
                     if count in cum_rec_fmt:
@@ -309,16 +304,16 @@ def extract_records(
             record_int = int.from_bytes(binary_record, byteorder="big", signed=False)
             record = []
 
-            if bitshift:
-                # Check each record of samples if it was recorded bit shifted to the left
-                # by a random number of bits by comparing the recorded time tic with the
-                # expected time tick for that record. Correct by bitshifting back to the
-                # right and insert expected missing binary digits.
+            if self.bitshift:
+                # Check each record of samples if it was recorded bit shifted to the
+                # left by a random number of bits by comparing the recorded time tic
+                # with the expected time tick for that record. Correct by bitshifting
+                # back to the right and insert expected missing binary digits.
                 record_int = _bit_shift_correct(
-                    record_int, start_rcrd + rcrd_count, logger
+                    self,record_int, start_rcrd + rcrd_count,
                 )
 
-            for signed_bit_len in reversed(logger.rec_fmt):
+            for signed_bit_len in reversed(self.logger.rec_fmt):
                 bit_len = int(abs(signed_bit_len))
                 # Read right most bit_len bits
                 field = record_int & (2**bit_len - 1)
@@ -350,38 +345,49 @@ def extract_records(
 
         # Shift the tick count if necessary, so that it relates to the first
         # sample in each record (instead of the last).
-        if logger.timing == "first":
+        if self.logger.timing == "first":
             tick_possn = 0
-        elif logger.timing == "last":
-            tick_possn = int((logger.smpls_per_rec - 1) * logger.sample_epoch)
+        elif self.logger.timing == "last":
+            tick_possn = int((self.logger.smpls_per_rec - 1) * self.logger.sample_epoch)
         else:
             sys.exit(
-                f"Timing has not been correctly defined for the {logger.version} "
+                f"Timing has not been correctly defined for the {self.logger.version} "
                 f"logger in the 'APGlogger.ini' file."
             )
-        last_field = len(logger.rec_fmt) - 1
-        ticks_ms = records[:, last_field - logger.fmt_field["tic"]] - tick_possn
+        last_field = len(self.logger.rec_fmt) - 1
+        ticks_ms = records[:, last_field - self.logger.fmt_field["tic"]] - tick_possn
 
-        nominal_first_tick = start_rcrd * logger.record_epoch
+        nominal_first_tick = start_rcrd * self.logger.record_epoch
 
         # If time tick values are not pressent then populate tick values with
         # assumed nominal tick count.
+        ignore_time_ticks = False
         if ticks_ms[-1] <= 0 and ticks_ms[1] <= 0:
             print(
                 "ATTENTION!!! It appears that time-tick values were not recorded "
-                "in the raw data file. All time values in the output are only "
-                "as accurate as the PCB oscillator. Values from the  precision "
-                "clock are not available!"
+                "in the raw data file. "
             )
-            record_epoch = logger.sample_epoch * logger.smpls_per_rec
+            ignore_time_ticks = True
+        if self.ignore_tics:
+            print(
+                "ATTENTION!!! Timestamp values in the raw data file are being ignored. "
+            )
+            ignore_time_ticks = True
+        if ignore_time_ticks:
+            print(
+                "All time values in the output are only "
+                "as accurate as the PCB oscillator. Values from the precision "
+                "clock are not being used!"
+            )
+            record_epoch = self.logger.sample_epoch * self.logger.smpls_per_rec
             stop = nominal_first_tick + (ticks_ms.size) * record_epoch
             ticks_ms = np.arange(nominal_first_tick, stop, record_epoch)
-            records[:, last_field - logger.fmt_field["tic"]] = ticks_ms
+            records[:, last_field - self.logger.fmt_field["tic"]] = ticks_ms
             return records
 
         # Remove tick count rollovers and make actual ticks continuously
         # increasing.
-        rollover_period = 2**logger.tic_bit_len  # in millisec
+        rollover_period = 2**self.logger.tic_bit_len  # in millisec
 
         # The number of rollovers prior to the beginning of the specified data
         # window.
@@ -421,11 +427,11 @@ def extract_records(
                     # more than onerecord to reset to zero), then for first
                     # record after the rollover calc as the previous cumulative
                     # tick count plus a std record period.
-                    ticks_ms[rollover] = ticks_ms[rollover - 1] + logger.record_epoch
+                    ticks_ms[rollover] = ticks_ms[rollover - 1] + self.logger.record_epoch
                 elif (
                     abs(
                         (ticks_ms[rollover + 1] - ticks_ms[rollover - 1])
-                        - 2 * logger.record_epoch
+                        - 2 * self.logger.record_epoch
                     )
                     < 2
                 ):
@@ -433,11 +439,11 @@ def extract_records(
                     # indicated rollover are within 2ms of the expected time
                     # diff of 2 epochs, then the current single time tick is
                     # corrupt and not an actual rollover.
-                    ticks_ms[rollover] = ticks_ms[rollover - 1] + logger.record_epoch
+                    ticks_ms[rollover] = ticks_ms[rollover - 1] + self.logger.record_epoch
                 elif (
                     abs(
                         (ticks_ms[rollover] - ticks_ms[rollover - 2])
-                        - 2 * logger.record_epoch
+                        - 2 * self.logger.record_epoch
                     )
                     < 2
                 ):
@@ -446,17 +452,17 @@ def extract_records(
                     # 2 epochs, then the previous single time tick is
                     # corrupt and not an actual rollover.
                     ticks_ms[rollover - 1] = (
-                        ticks_ms[rollover - 2] + logger.record_epoch
+                        ticks_ms[rollover - 2] + self.logger.record_epoch
                     )
                 else:
                     cumtv_rollovers = cumtv_rollovers + 1
                     ticks_ms[rollover:num_rcrds_wanted] = (
                         ticks_ms[rollover:num_rcrds_wanted] + rollover_period
                     )
-                    rollover_dt = file_start_clk + np.timedelta64(
+                    rollover_dt = self.start_clk + np.timedelta64(
                         ticks_ms[rollover], "ms"
                     )
                     print(f"A time tick rollover occurred at {rollover_dt}.")
-    records[:, last_field - logger.fmt_field["tic"]] = ticks_ms
+    records[:, last_field - self.logger.fmt_field["tic"]] = ticks_ms
 
     return records

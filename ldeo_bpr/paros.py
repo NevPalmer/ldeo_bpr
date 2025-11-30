@@ -10,12 +10,12 @@ from pathlib import Path
 class Paros:
     """Class for Paroscientific APG pressure gauge."""
 
-    ser_no: str = None
-    u: float = None
-    y: tuple[float] = None
-    c: tuple[float] = None
-    d: tuple[float] = None
-    t: tuple[float] = None
+    ser_no: str
+    u: float
+    y: tuple[float]
+    c: tuple[float]
+    d: tuple[float]
+    t: tuple[float]
 
     @classmethod
     def from_file(cls, filename: str, paros_sn: str):
@@ -34,5 +34,5 @@ class Paros:
                 f"The file '{filename}' does not contain an entry for "
                 f"APG sensor with serial number {key}."
             )
-        paros.y = paros.y + (0.0,)  # Constant term for 'Y' is zero.
+        paros.y = (0.0,)  # Constant term for 'Y' is zero.
         return paros
