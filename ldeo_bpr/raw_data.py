@@ -43,7 +43,11 @@ class RawFile:
         self.num_rcrds = (
             int((self.filesize_b - self.logger.head_len) / self.logger.rec_len) - 1
         )
-        self.nom_file_duration_ms = self.num_rcrds * self.logger.record_epoch
+        if self.logger.timing == "first":
+            tick_possn = 0
+        elif self.logger.timing == "last":
+            tick_possn = int((self.logger.smpls_per_rec - 1) * self.logger.sample_epoch)
+        self.nom_file_duration_ms = self.num_rcrds * self.logger.record_epoch + tick_possn
         self.actl_file_tics_ms = self._file_end_tic_count()
         self.nom_tick_diff_ms = self.nom_file_duration_ms - self.actl_file_tics_ms
         self._clockdrift()
@@ -119,8 +123,8 @@ class RawFile:
         pcore_col = last_field - self.logger.fmt_field["pcore"]
         pn_col = last_field - self.logger.fmt_field["pn"]
 
-        # Window for identifying sync_tick_count is ±15 seconds long.
-        sync_wndw_ms = 15_000
+        # Window for identifying sync_tick_count is defined by constant.
+        sync_wndw_ms = const.SYNC_WINDOW_MS
         # GPS sync time (gpssync_dt) is mid point of  window for sync.
         wndw_begin_ms = dt64_utils.delta64_to_ms(self.gpssync_dt - self.start_clk)
         wndw_begin_ms = wndw_begin_ms - sync_wndw_ms
@@ -236,20 +240,16 @@ def _bit_shift_correct(
     rcrd_len = self.logger.rec_len * 8
     expected_tic = (rcrd_number) * self.logger.record_epoch
     expected_tic = expected_tic % 2**tic_len
-    # print(f"{rcrd_number=}\n")
     tic_field = record_int >> (rcrd_len - tic_len)
     for bit_shift in range(0, self.logger.tic_bit_len):
         mask = 2**tic_len - 1 >> bit_shift
         expected_tic_shifted = expected_tic & mask
-        # print(f"{bin(expected_tic_shifted)=}")
         tic_field_shifted = tic_field >> bit_shift
-        # print(f"{bin(tic_field_shifted)=   }\n")
         if expected_tic_shifted == tic_field_shifted:
             tic_prefix = expected_tic & ~mask
             tic_prefix = tic_prefix << (rcrd_len - tic_len)
             record_shifted = record_int >> bit_shift
             final_record = tic_prefix | record_shifted
-            # print(f"{bin(final_record)=}\n")
             return final_record
     else:
         sys.exit("No shifted tic match found!\n")
@@ -417,7 +417,6 @@ def extract_records(
                 nxt_rollover = num_rcrds_wanted
             else:
                 nxt_rollover = rollovers[idx[0] + 1]
-            # print(rollover, nxt_rollover)
             if (ticks_ms[rollover + 1] - ticks_ms[rollover]) != 0:
                 # Two consecutive identical tick counts indicates recording
                 # has stopped.

@@ -26,6 +26,10 @@ T_CHNL_CODE = "BKO"
 # Pressure conversion factor from PSIA to Pascal.
 PSIA_TO_PASCAL = 6.894757293168e3
 
+# When using frequency injection for determining the clock drift, this is the size of
+# the window (in milliseconds) around the GPS sync time to search for the sync tick.
+SYNC_WINDOW_MS = 200_000  # Window for identifying sync tick count.
+
 # Default values and choices for reading params from command line.
 DFLT_APG_INI: str = "ParosAPG.ini"
 DFLT_LOGGER_INI: str = "APGlogger.ini"
