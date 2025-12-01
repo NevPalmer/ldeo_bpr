@@ -362,7 +362,7 @@ def extract_records(
         # If time tick values are not pressent then populate tick values with
         # assumed nominal tick count.
         ignore_time_ticks = False
-        if ticks_ms[-1] <= 0 and ticks_ms[1] <= 0:
+        if ticks_ms[-1] <= 0 and ticks_ms[0] <= 0:
             print(
                 "ATTENTION!!! It appears that time-tick values were not recorded "
                 "in the raw data file. "
