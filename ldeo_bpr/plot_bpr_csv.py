@@ -31,14 +31,37 @@ def main():  # noqa: D103
         type=Path,
     )
 
+    parser.add_argument(
+        "--skiprows",
+        help=(
+            "Number of rows to skip at the beginning of the CSV file. "
+            "Default is None."
+        ),
+        type=int,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--numrows",
+        help=(
+            "Number of rows to include from the CSV file. "
+            "Default is to read to end of the file."
+        ),
+        type=int,
+        default=None,
+    )
+
     args = parser.parse_args()
     filename = args.infile
+    skip = args.skiprows
+    numrows = args.numrows
 
     df = pd.read_csv(
         filename,
         header=None,
-        # skiprows=86_400,  # one day = 86,400
-        # nrows=86_000,
+        on_bad_lines="warn",
+        skiprows=skip,  # one day = 86,400
+        nrows=numrows,
         names=("Time", "Pressure", "Temperature"),
         parse_dates=["Time"],
         dtype={
