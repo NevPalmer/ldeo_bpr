@@ -12,10 +12,10 @@ class Paros:
 
     ser_no: str
     u: float
-    y: tuple[float]
-    c: tuple[float]
-    d: tuple[float]
-    t: tuple[float]
+    y: tuple[float, ...]
+    c: tuple[float, ...]
+    d: tuple[float, ...]
+    t: tuple[float, ...]
 
     @classmethod
     def from_file(cls, filename: str, paros_sn: str):
@@ -34,5 +34,5 @@ class Paros:
                 f"The file '{filename}' does not contain an entry for "
                 f"APG sensor with serial number {key}."
             )
-        paros.y = (0.0,)  # Constant term for 'Y' is zero.
+        paros.y = tuple(list(paros.y) + [0.0,])  # Insert constant term for 'Y' as zero.
         return paros

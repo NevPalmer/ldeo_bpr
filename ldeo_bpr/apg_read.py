@@ -358,6 +358,7 @@ def generate_results(
     # tmptr_period_usec.fill(5.8430) #Fixed temp of +20.08°C for Paros 136309
     # tmptr_period_usec.fill(5.78714)  # Fixed temp of +5.71°C for Paros 150181
     # tmptr_period_usec.fill(5.824)  # Fixed temp of +21.55°C for Paros 140337
+    # tmptr_period_usec.fill(5.7734)  # Fixed temp of +????°C for Paros 136305
 
     # Pressure period (usec)
     presr_period_usec = (press_raw / (logger.pp_fctr) + logger.pp_cnst) / (
