@@ -104,15 +104,15 @@ class RawFile:
             )
             return
 
-        millisecs_logged = dt64_utils.delta64_to_ms(self.gpssync_dt - self.start_clk)
+        gps_millisecs = dt64_utils.delta64_to_ms(self.gpssync_dt - self.start_clk)
 
         if self.sync_tick_count is not None:
             # Calculate clock drift from sync_tick_count provided.
             # Number of ticks_ms until rollover and restart at zero.
             tick_rollover = 2**self.logger.tic_bit_len  # 1 tick = 1 millisecond
-            millisecs_logged = millisecs_logged % tick_rollover
+            gps_millisecs = gps_millisecs % tick_rollover
             # APG logger clock offset relative to GPS time (positive = APG > GPS)
-            self.clockdrift_ms = int(millisecs_logged - self.sync_tick_count)
+            self.clockdrift_ms = int(self.sync_tick_count - gps_millisecs)
             return
 
         # Calculate clock drift by detecting frequency injection.
@@ -226,7 +226,7 @@ class RawFile:
         )
 
         # APG logger clock offset relative to GPS time (positive = APG > GPS)
-        self.clockdrift_ms = int(self.sync_tick_count - millisecs_logged)
+        self.clockdrift_ms = int(self.sync_tick_count - gps_millisecs)
         return
 
 
