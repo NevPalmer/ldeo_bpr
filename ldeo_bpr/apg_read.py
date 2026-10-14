@@ -637,57 +637,61 @@ def generate_results(
     if plot_flags["format"] != "n":
         print("Generating plot.", flush=True)
         p_kpa = np.divide(pressure_out, 1000)
+
         ## Set min-max values for plot Y-axes
-        ## Uncomment below to plot full range of data.
-        # p_min = np.min(p_kpa)
-        # p_max = np.max(p_kpa)
-        # p_range = p_max - p_min
+        if const.PRESSURE_SPREAD == 0:
+            p_min = np.min(p_kpa)
+            p_max = np.max(p_kpa)
+            p_range = p_max - p_min
 
-        # if p_range == 0:
-        #     intvl = 10
-        # else:
-        #     int_log = int(np.log10(p_range))
-        #     if 10**int_log / p_range >= 0.5:
-        #         intvl = 10**int_log / 10
-        #     elif 10**int_log / p_range >= 0.2:
-        #         intvl = 10**int_log / 5
-        #     elif 10**int_log / p_range >= 0.1:
-        #         intvl = 10**int_log / 2
-        #     else:
-        #         intvl = 10**int_log
-        # p_min = p_min - p_min % intvl - intvl
-        # p_max = p_max - p_max % intvl + 2 * intvl
+            if p_range == 0:
+                intvl = 10
+            else:
+                int_log = int(np.log10(p_range))
+                if 10**int_log / p_range >= 0.5:
+                    intvl = 10**int_log / 10
+                elif 10**int_log / p_range >= 0.2:
+                    intvl = 10**int_log / 5
+                elif 10**int_log / p_range >= 0.1:
+                    intvl = 10**int_log / 2
+                else:
+                    intvl = 10**int_log
+            p_min = p_min - p_min % intvl - intvl
+            p_max = p_max - p_max % intvl + 2 * intvl
+        else:
+            if const.PRESSURE_MID == 0:
+                p_mid = np.median(p_kpa)
+            else:
+                p_mid = const.PRESSURE_MID
+            p_min = p_mid - (const.PRESSURE_SPREAD / 2)
+            p_max = p_mid + (const.PRESSURE_SPREAD / 2)
 
-        # t_min = np.min(temperature_out)
-        # t_max = np.max(temperature_out)
-        # t_range = t_max - t_min
-        # if t_range == 0:
-        #     intvl = 0.1
-        # else:
-        #     int_log = int(np.log10(t_range))
-        #     if 10**int_log / t_range >= 0.5:
-        #         intvl = 10**int_log / 10
-        #     elif 10**int_log / t_range >= 0.2:
-        #         intvl = 10**int_log / 5
-        #     elif 10**int_log / t_range >= 0.1:
-        #         intvl = 10**int_log / 2
-        #     else:
-        #         intvl = 10**int_log
-        # t_min = t_min - t_min % intvl - intvl
-        # t_max = t_max - t_max % intvl + 2 * intvl
 
-        ## Uncomment below to plot specified range of data about the mean.
-        p_median = np.median(p_kpa)
-        # pres_median = 22270
-        p_spread = 20
-        p_min = p_median - (p_spread / 2)
-        p_max = p_median + (p_spread / 2)
-
-        t_median = np.median(temperature_out)
-        # tptr_median = 5.7
-        t_spread = 1
-        t_min = t_median - (t_spread / 2)
-        t_max = t_median + (t_spread / 2)
+        if const.TEMPERATURE_SPREAD == 0:
+            t_min = np.min(temperature_out)
+            t_max = np.max(temperature_out)
+            t_range = t_max - t_min
+            if t_range == 0:
+                intvl = 0.1
+            else:
+                int_log = int(np.log10(t_range))
+                if 10**int_log / t_range >= 0.5:
+                    intvl = 10**int_log / 10
+                elif 10**int_log / t_range >= 0.2:
+                    intvl = 10**int_log / 5
+                elif 10**int_log / t_range >= 0.1:
+                    intvl = 10**int_log / 2
+                else:
+                    intvl = 10**int_log
+            t_min = t_min - t_min % intvl - intvl
+            t_max = t_max - t_max % intvl + 2 * intvl
+        else:
+            if const.TEMPERATURE_MID == 0:
+                t_mid = np.median(temperature_out)
+            else:
+                t_mid = const.TEMPERATURE_MID
+            t_min = t_mid - (const.TEMPERATURE_SPREAD / 2)
+            t_max = t_mid + (const.TEMPERATURE_SPREAD / 2)
 
         # Plot Results
         fig, ax1 = plt.subplots(figsize=(15, 9))

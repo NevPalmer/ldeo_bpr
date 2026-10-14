@@ -41,3 +41,16 @@ SER_BAUD: int = 9600
 SER_PARITY: str = "N"
 SER_STOP: int = 1
 SER_BYTESIZE: int = 8
+
+# Constants for Y-axis limits for plotting pressure and temperature.
+# The next four lines are generally suitable for a seafloor deployed BPR.
+PRESSURE_MID: float = 0.0  # kPa (If 0, then use median of data for mid-point)
+PRESSURE_SPREAD: float = 20.0  # kPa (if 0, then use min and max of data for spread)
+TEMPERATURE_MID: float = 0.0  # degC (If 0, then use median of data for mid-point)
+TEMPERATURE_SPREAD: float = 1.0  # degC (if 0, then use min and max of data for spread)
+
+# # Uncomment the following lines to override the above defaults for other scenarios.
+# PRESSURE_MID: float = 110.0  # kPa (If 0, then use median of data for mid-point)
+# PRESSURE_SPREAD: float = 20.0  # kPa (if 0, then use min and max of data for spread)
+# TEMPERATURE_MID: float = 22.0  # degC (If 0, then use median of data for mid-point)
+# TEMPERATURE_SPREAD: float = 10.0  # degC (if 0, then use min and max of data for spread)
